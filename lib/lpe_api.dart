@@ -133,7 +133,16 @@ class LpeApi {
       if (res.statusCode == 200 && status == 'SUCCESS') {
         return (true, 'Saved to your Omni Node.');
       }
-      return (false, 'Node answered ${res.statusCode}: $status');
+      // Show the node's own reason, not just its status word: the daemon
+      // answers refusals as {status: ERROR, message: "..."} and the message
+      // is the actionable part (e.g. the handle rule the profile broke).
+      final message = decoded is Map ? '${decoded['message'] ?? ''}' : '';
+      return (
+        false,
+        message.isNotEmpty
+            ? 'Node answered ${res.statusCode}: $message'
+            : 'Node answered ${res.statusCode}: $status'
+      );
     } catch (e) {
       return (false, 'Could not reach the node: $e');
     }
