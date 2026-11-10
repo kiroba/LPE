@@ -311,8 +311,10 @@ class _LpeHomeState extends State<LpeHome> {
         const SizedBox(height: 8),
         const Text(
           'Skeleton scope: one avatar (default_m_01), no cosmetics yet. '
-          'Your sign is kept on this phone for now — the node profile schema '
-          'gains a sign field in a later daemon update.',
+          'Handles are lowercase — 3–20 chars of a–z, 0–9 or _ (the node '
+          'adds the @ itself). Your sign is kept on this phone for now — '
+          'the node profile schema gains a sign field in a later daemon '
+          'update.',
           style: TextStyle(fontSize: 12),
         ),
         const SizedBox(height: 16),
