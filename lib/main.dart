@@ -199,6 +199,62 @@ class _LpeHomeState extends State<LpeHome> {
         'Transfer code copied — paste it into Plaza-Brawler > Settings > Identity transfer.');
   }
 
+  /// Imports a transfer code (from this app's own export on another install,
+  /// or any Omni app) and adopts that identity as this install's own. This is
+  /// LPE's recovery path: if a reinstall ever wipes this app's seed, the code
+  /// the person already carried into their other apps restores the SAME
+  /// identity here — the profile on the node never notices. Replaces this
+  /// install's current key, so it demands the same deliberate confirmation as
+  /// exporting. Takes effect on restart: StargateIdentity caches its load.
+  Future<void> _importTransferCode() async {
+    final ctrl = TextEditingController();
+    final code = await showDialog<String>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Import an identity transfer code?'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Text(
+                'This REPLACES the identity this install signs with. Any '
+                'profile this install\'s current key made stays on the node '
+                'under that old key. Paste only your own code.'),
+            const SizedBox(height: 12),
+            TextField(
+              controller: ctrl,
+              decoration: const InputDecoration(
+                labelText: 'Transfer code',
+                hintText: 'omni-seed-v1.…',
+              ),
+              maxLines: 3,
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx, ctrl.text),
+            child: const Text('Import identity'),
+          ),
+        ],
+      ),
+    );
+    if (code == null || !mounted) return;
+    final seed = seedFromIdentityTransferCode(code);
+    if (seed == null) {
+      setState(() => _status =
+          'That code did not check out — wrong format or a damaged paste. Nothing was changed.');
+      return;
+    }
+    await SecureStorageSeedStore().write(seed);
+    if (!mounted) return;
+    setState(() => _status =
+        'Identity imported. Restart LPE to sign as the imported identity.');
+  }
+
   Future<void> _saveProfile() async {
     final identity = _identity;
     final handle = _handleCtrl.text.trim();
@@ -304,10 +360,21 @@ class _LpeHomeState extends State<LpeHome> {
           onPressed: _busy ? null : _copyTransferCode,
           child: const Text('Copy identity transfer code'),
         ),
+        const SizedBox(height: 8),
+        OutlinedButton(
+          onPressed: _busy ? null : _importTransferCode,
+          child: const Text('Import identity transfer code'),
+        ),
         const SizedBox(height: 6),
         const Text(
           'Carries this identity into your other Omni apps on this phone — '
           'Plaza-Brawler imports it in Settings, then fights as this Halo.',
+        const SizedBox(height: 6),
+        const Text(
+          'Import restores an identity here — the recovery path if a reinstall '
+          'ever wipes this app and you hold the code in another app.',
+          style: TextStyle(fontSize: 12, color: Colors.black54),
+        ),
           style: TextStyle(fontSize: 12, color: Colors.black54),
         ),
       ],
