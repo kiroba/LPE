@@ -143,15 +143,19 @@ class _LpeHomeState extends State<LpeHome> {
       _busy = true;
       _status = 'Pinging your node…';
     });
-    final ok = await _api.nodeHealthy();
+    final probe = await _api.probeNode();
     if (!mounted) return;
     setState(() {
       _busy = false;
-      _status = ok
-          ? 'Node is answering on $_host.'
-          : 'Node not answering — is Omni Node running on $_host?';
+      _status = switch (probe) {
+        NodeProbe.ok => 'Node is answering on $_host.',
+        NodeProbe.unauthorized =>
+          'Node is running on $_host but rejected the token — paste the local token from Omni Node, Save settings, then test again.',
+        NodeProbe.unreachable =>
+          'Node not answering — is Omni Node running on $_host?',
+      };
     });
-    if (ok) await _refreshProfile();
+    if (probe == NodeProbe.ok) await _refreshProfile();
   }
 
   Future<void> _saveProfile() async {

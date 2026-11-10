@@ -34,6 +34,10 @@ class LpeApi {
 
   Map<String, String> get _headers => {
         'Accept': 'application/json',
+        // The Android node runs its daemon with the local token required
+        // (daemon v8.19.0): loopback callers must send it as
+        // X-Omni-Local-Token; the daemon also accepts it as a Bearer token.
+        if (token.isNotEmpty) 'X-Omni-Local-Token': token,
         if (token.isNotEmpty) 'Authorization': 'Bearer $token',
       };
 
@@ -46,14 +50,25 @@ class LpeApi {
       );
 
   /// Node health via the telemetry port, like OmniHubClient's check.
-  Future<bool> nodeHealthy() async {
+  /// The phone node requires the local token on :9100 too (the daemon's
+  /// remote_gate covers both servers), so the probe sends it.
+  Future<bool> nodeHealthy() async => await probeNode() == NodeProbe.ok;
+
+  /// Three honest answers, not one misleading one: a node that answers 401
+  /// is RUNNING — it is the token it is rejecting, and the UI must say so.
+  Future<NodeProbe> probeNode() async {
     try {
       final res = await http
-          .get(_uri(telemetryPort, '/api/v1/telemetry/node-health'))
+          .get(_uri(telemetryPort, '/api/v1/telemetry/node-health'),
+              headers: _headers)
           .timeout(const Duration(seconds: 3));
-      return res.statusCode == 200;
+      if (res.statusCode == 200) return NodeProbe.ok;
+      if (res.statusCode == 401 || res.statusCode == 403) {
+        return NodeProbe.unauthorized;
+      }
+      return NodeProbe.unreachable;
     } catch (_) {
-      return false;
+      return NodeProbe.unreachable;
     }
   }
 
@@ -124,3 +139,7 @@ class LpeApi {
     }
   }
 }
+
+/// Result of [LpeApi.probeNode]: the node answered, the node answered but
+/// rejected the local token, or nothing is listening at all.
+enum NodeProbe { ok, unauthorized, unreachable }
