@@ -369,12 +369,12 @@ class _LpeHomeState extends State<LpeHome> {
         const Text(
           'Carries this identity into your other Omni apps on this phone — '
           'Plaza-Brawler imports it in Settings, then fights as this Halo.',
+          style: TextStyle(fontSize: 12, color: Colors.black54),
+        ),
         const SizedBox(height: 6),
         const Text(
           'Import restores an identity here — the recovery path if a reinstall '
           'ever wipes this app and you hold the code in another app.',
-          style: TextStyle(fontSize: 12, color: Colors.black54),
-        ),
           style: TextStyle(fontSize: 12, color: Colors.black54),
         ),
       ],
