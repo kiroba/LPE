@@ -1,5 +1,6 @@
 import 'dart:convert';
 
+import 'package:crypto/crypto.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:omni_core_ui/omni_core_ui.dart';
 
@@ -42,4 +43,42 @@ class SecureStorageSeedStore implements IdentitySeedStore {
   @override
   Future<void> write(List<int> seed) =>
       _storage.write(key: _key, value: base64Encode(seed));
+}
+
+/// An identity transfer code: this install's seed, encoded so the SAME person
+/// can carry their Ed25519 identity into another Omni app on the same phone.
+///
+/// Why this exists: Android sandboxes every app's storage, so apps cannot
+/// literally share a seed store — each app that must act as the person needs
+/// the seed handed to it once. The code is the hand-off: LPE (the identity
+/// home) shows it; the receiving app imports it into its own secure store.
+///
+/// Format: `omni-seed-v1.<base64 seed>.<check>` where <check> is the first 8
+/// hex chars of sha256(seed) — enough to catch paste damage before anything
+/// is overwritten. THE CODE IS THE IDENTITY: anyone holding it can sign as
+/// the person. Show it only on a deliberate tap, never log or send it.
+String identityTransferCode(List<int> seed) {
+  if (seed.length != 32) {
+    throw ArgumentError('Ed25519 seed must be 32 bytes');
+  }
+  final check = sha256.convert(seed).toString().substring(0, 8);
+  return 'omni-seed-v1.${base64Encode(seed)}.$check';
+}
+
+/// Parses a transfer code produced by [identityTransferCode] in any Omni app.
+/// Returns the 32-byte seed, or null for anything malformed — wrong prefix,
+/// bad base64, wrong length, or a checksum mismatch (damaged paste).
+List<int>? seedFromIdentityTransferCode(String code) {
+  final parts = code.trim().split('.');
+  if (parts.length != 3 || parts[0] != 'omni-seed-v1') return null;
+  try {
+    final seed = base64Decode(parts[1]);
+    if (seed.length != 32) return null;
+    if (sha256.convert(seed).toString().substring(0, 8) != parts[2]) {
+      return null;
+    }
+    return seed;
+  } catch (_) {
+    return null;
+  }
 }

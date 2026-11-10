@@ -10,6 +10,7 @@
 // person-signed event (POST /api/lpe/profile). This app holds no server and
 // phones nothing home: it talks to 127.0.0.1, or to the hub the user names.
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:omni_core_ui/omni_core_ui.dart';
 
@@ -158,6 +159,46 @@ class _LpeHomeState extends State<LpeHome> {
     if (probe == NodeProbe.ok) await _refreshProfile();
   }
 
+  /// Copies this identity's transfer code to the clipboard, after a warning:
+  /// the code IS the identity, so it only moves on a deliberate confirmation.
+  /// Another Omni app on this phone (Plaza-Brawler's Settings) imports it to
+  /// act as the same person — Android gives apps no shared storage to do it
+  /// automatically.
+  Future<void> _copyTransferCode() async {
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Copy your identity transfer code?'),
+        content: const Text(
+            'This code is your private identity key in disguise — anyone who '
+            'has it can sign as you. Only paste it into your own Omni apps '
+            'on this phone (Plaza-Brawler: Settings > Identity transfer), '
+            'and never send it to anyone.'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Copy code'),
+          ),
+        ],
+      ),
+    );
+    if (ok != true || !mounted) return;
+    final seed = await SecureStorageSeedStore().read();
+    if (!mounted) return;
+    if (seed == null) {
+      setState(() => _status = 'No identity seed found to export.');
+      return;
+    }
+    await Clipboard.setData(
+        ClipboardData(text: identityTransferCode(seed)));
+    setState(() => _status =
+        'Transfer code copied — paste it into Plaza-Brawler > Settings > Identity transfer.');
+  }
+
   Future<void> _saveProfile() async {
     final identity = _identity;
     final handle = _handleCtrl.text.trim();
@@ -258,6 +299,17 @@ class _LpeHomeState extends State<LpeHome> {
           onPressed: _busy ? null : _refreshProfile,
           child: const Text('Refresh from node'),
         ),
+        const SizedBox(height: 8),
+        OutlinedButton(
+          onPressed: _busy ? null : _copyTransferCode,
+          child: const Text('Copy identity transfer code'),
+        ),
+        const SizedBox(height: 6),
+        const Text(
+          'Carries this identity into your other Omni apps on this phone — '
+          'Plaza-Brawler imports it in Settings, then fights as this Halo.',
+          style: TextStyle(fontSize: 12, color: Colors.black54),
+        ),
       ],
     );
   }
@@ -311,8 +363,10 @@ class _LpeHomeState extends State<LpeHome> {
         const SizedBox(height: 8),
         const Text(
           'Skeleton scope: one avatar (default_m_01), no cosmetics yet. '
-          'Your sign is kept on this phone for now — the node profile schema '
-          'gains a sign field in a later daemon update.',
+          'Handles are lowercase — 3–20 chars of a–z, 0–9 or _ (the node '
+          'adds the @ itself). Your sign is kept on this phone for now — '
+          'the node profile schema gains a sign field in a later daemon '
+          'update.',
           style: TextStyle(fontSize: 12),
         ),
         const SizedBox(height: 16),
