@@ -14,6 +14,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:omni_core_ui/omni_core_ui.dart';
 
+import 'halo_stage.dart';
 import 'lpe_api.dart';
 import 'lpe_identity.dart';
 
@@ -39,27 +40,40 @@ void main() {
   runApp(const LpeApp());
 }
 
-class LpeApp extends StatelessWidget {
+/// Slice A: the whole app lives inside the person's color. The seed starts
+/// at the default and [_LpeHomeState] lifts the stored favorite color into
+/// it on load; picking a swatch re-themes the app with a wash (AnimatedTheme
+/// in the home scaffold).
+class LpeApp extends StatefulWidget {
   const LpeApp({super.key});
+
+  @override
+  State<LpeApp> createState() => _LpeAppState();
+}
+
+class _LpeAppState extends State<LpeApp> {
+  Color _seed = kDefaultHaloColor;
 
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
       title: 'LPE',
-      theme: ThemeData(
-        colorScheme: ColorScheme.fromSeed(
-          seedColor: const Color(0xFF3A86EF),
-          brightness: Brightness.dark,
-        ),
-        useMaterial3: true,
+      theme: haloTheme(_seed),
+      home: LpeHome(
+        onSeedChanged: (c) {
+          if (c != _seed) setState(() => _seed = c);
+        },
       ),
-      home: const LpeHome(),
     );
   }
 }
 
 class LpeHome extends StatefulWidget {
-  const LpeHome({super.key});
+  const LpeHome({super.key, required this.onSeedChanged});
+
+  /// Lifts the current favorite color up to the app so the Material theme
+  /// itself follows the stage (Slice A theme wash).
+  final ValueChanged<Color> onSeedChanged;
 
   @override
   State<LpeHome> createState() => _LpeHomeState();
@@ -78,6 +92,7 @@ class _LpeHomeState extends State<LpeHome> {
 
   String _host = '127.0.0.1';
   String _sign = 'aries';
+  Color _favorite = kDefaultHaloColor;
 
   final _tokenCtrl = TextEditingController();
   final _handleCtrl = TextEditingController();
@@ -103,6 +118,14 @@ class _LpeHomeState extends State<LpeHome> {
     final host = await _storage.read(key: 'lpe_node_host');
     final token = await _storage.read(key: 'lpe_node_token');
     final sign = await _storage.read(key: 'lpe_sign');
+    final fav = await _storage.read(key: kHaloColorKey);
+    if (fav != null) {
+      final v = int.tryParse(fav);
+      if (v != null) {
+        _favorite = Color(v);
+        widget.onSeedChanged(_favorite);
+      }
+    }
     if (host != null && host.isNotEmpty) _host = host;
     if (token != null) _tokenCtrl.text = token;
     if (sign != null && kSigns.any((s) => s.$1 == sign)) _sign = sign;
@@ -284,6 +307,23 @@ class _LpeHomeState extends State<LpeHome> {
     if (ok) await _refreshProfile();
   }
 
+  /// Slice A: the swatch tap. Updates the stage, the whole app theme, and
+  /// local storage in one go. (Later this color also rides the private
+  /// profile layer — for now it never leaves this phone.)
+  Future<void> _pickColor(Color c) async {
+    setState(() => _favorite = c);
+    widget.onSeedChanged(c);
+    await _storage.write(key: kHaloColorKey, value: '${c.value}');
+  }
+
+  String get _stageHandle {
+    final display = _profile?['handle_display'] as String?;
+    if (display != null && display.isNotEmpty) return display;
+    final typed = _handleCtrl.text.trim();
+    if (typed.isNotEmpty) return '@$typed';
+    return 'Your Halo';
+  }
+
   Color get _auraColor {
     final aura = _profile?['aura'];
     final hex = aura is Map ? '${aura['aura_color_hex'] ?? ''}' : '';
@@ -300,7 +340,10 @@ class _LpeHomeState extends State<LpeHome> {
   @override
   Widget build(BuildContext context) {
     final pages = [_homePage(), _creatorPage(), _connectPage()];
-    return Scaffold(
+    return AnimatedTheme(
+      data: haloTheme(_favorite),
+      duration: const Duration(milliseconds: 600),
+      child: Scaffold(
       appBar: AppBar(title: const Text('LPE — your Halo')),
       body: pages[_tab],
       bottomNavigationBar: NavigationBar(
@@ -312,6 +355,7 @@ class _LpeHomeState extends State<LpeHome> {
               icon: Icon(Icons.auto_fix_high), label: 'Creator'),
           NavigationDestination(icon: Icon(Icons.hub), label: 'Node'),
         ],
+      ),
       ),
     );
   }
@@ -328,6 +372,14 @@ class _LpeHomeState extends State<LpeHome> {
       padding: const EdgeInsets.all(16),
       children: [
         _statusLine(),
+        HaloStage(
+          seed: _favorite,
+          handle: _stageHandle,
+          signName: _signData.$2,
+          signGlyph: _signData.$3,
+          onColorPicked: _pickColor,
+        ),
+        const SizedBox(height: 12),
         Card(
           child: ListTile(
             leading: CircleAvatar(
@@ -386,6 +438,14 @@ class _LpeHomeState extends State<LpeHome> {
       padding: const EdgeInsets.all(16),
       children: [
         _statusLine(),
+        HaloStage(
+          seed: _favorite,
+          handle: _stageHandle,
+          signName: _signData.$2,
+          signGlyph: _signData.$3,
+          onColorPicked: _pickColor,
+        ),
+        const SizedBox(height: 16),
         Center(
           child: CircleAvatar(
             radius: 44,
