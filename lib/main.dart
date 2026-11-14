@@ -34,6 +34,15 @@ const List<(String, String, String)> kSigns = [
   ('ophiuchus', 'Ophiuchus', '⛎'),
 ];
 
+/// Cosmetics this build knows how to render, as (item id, label,
+/// socket label). The ids are the pack item ids from the importer
+/// design — the crown is the signed pack omnimod.base.crown-01's
+/// head_socket_crown. The profile carries the ids in its cosmetics
+/// list; the stage renders them from the id (see halo_stage.dart).
+const List<(String, String, String)> kCosmeticCatalog = [
+  ('head_socket_crown', 'Crown', 'Head socket'),
+];
+
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
   StargateIdentity.seedStore = SecureStorageSeedStore();
@@ -93,6 +102,7 @@ class _LpeHomeState extends State<LpeHome> {
   String _host = '127.0.0.1';
   String _sign = 'aries';
   Color _favorite = kDefaultHaloColor;
+  List<String> _cosmetics = [];
 
   final _tokenCtrl = TextEditingController();
   final _handleCtrl = TextEditingController();
@@ -119,6 +129,10 @@ class _LpeHomeState extends State<LpeHome> {
     final token = await _storage.read(key: 'lpe_node_token');
     final sign = await _storage.read(key: 'lpe_sign');
     final fav = await _storage.read(key: kHaloColorKey);
+    final cos = await _storage.read(key: 'lpe_cosmetics');
+    if (cos != null && cos.isNotEmpty) {
+      _cosmetics = cos.split(',').where((s) => s.isNotEmpty).toList();
+    }
     if (fav != null) {
       final v = int.tryParse(fav);
       if (v != null) {
@@ -148,6 +162,13 @@ class _LpeHomeState extends State<LpeHome> {
       if (profile != null) {
         _handleCtrl.text = '${profile['handle'] ?? ''}';
         _ambientCtrl.text = '${profile['ambient_activity'] ?? ''}';
+        final cos = profile['cosmetics'];
+        if (cos is List) {
+          // The node's profile is the source of truth once it exists;
+          // the phone-local copy below is the offline fallback.
+          _cosmetics = cos.map((e) => '$e').toList();
+          _persistCosmetics();
+        }
         _status = 'Profile loaded from your node.';
       } else {
         _status = 'No profile on this node yet — create yours.';
@@ -291,11 +312,12 @@ class _LpeHomeState extends State<LpeHome> {
       _status = 'Signing and saving your profile…';
     });
     await _storage.write(key: 'lpe_sign', value: _sign);
+    _persistCosmetics();
     final (ok, message) = await _api.postProfile(
       identity: identity,
       handle: handle,
       avatar: 'default_m_01',
-      cosmetics: const [],
+      cosmetics: _cosmetics,
       ambientActivity: _ambientCtrl.text.trim(),
       previousEventId: _profile?['event_id'] as String?,
     );
@@ -305,6 +327,24 @@ class _LpeHomeState extends State<LpeHome> {
       _status = message;
     });
     if (ok) await _refreshProfile();
+  }
+
+  /// Keeps the phone-local cosmetics copy in step, so the stage can
+  /// render equipment before (or without) a node round-trip — the same
+  /// fallback pattern as the sign. The node's profile wins on load.
+  void _persistCosmetics() {
+    _storage.write(key: 'lpe_cosmetics', value: _cosmetics.join(','));
+  }
+
+  /// Equips or unequips a cosmetic by its pack item id. The change is
+  /// local until the next profile save posts the cosmetics list.
+  void _toggleCosmetic(String id, bool on) {
+    setState(() {
+      _cosmetics = on
+          ? [..._cosmetics, id]
+          : _cosmetics.where((c) => c != id).toList();
+    });
+    _persistCosmetics();
   }
 
   /// Slice A: the swatch tap. Updates the stage, the whole app theme, and
@@ -378,6 +418,7 @@ class _LpeHomeState extends State<LpeHome> {
           signName: _signData.$2,
           signGlyph: _signData.$3,
           onColorPicked: _pickColor,
+          cosmetics: _cosmetics,
         ),
         const SizedBox(height: 12),
         Card(
@@ -444,6 +485,7 @@ class _LpeHomeState extends State<LpeHome> {
           signName: _signData.$2,
           signGlyph: _signData.$3,
           onColorPicked: _pickColor,
+          cosmetics: _cosmetics,
         ),
         const SizedBox(height: 16),
         Center(
@@ -487,13 +529,30 @@ class _LpeHomeState extends State<LpeHome> {
             border: OutlineInputBorder(),
           ),
         ),
+        const SizedBox(height: 16),
+        Text('Cosmetics',
+            style: Theme.of(context).textTheme.titleSmall),
+        const SizedBox(height: 4),
+        const Text(
+          'Equipment renders on your Halo from its pack item id and '
+          'saves with your profile. The crown is the reference cosmetic '
+          'from the signed pack omnimod.base.crown-01.',
+          style: TextStyle(fontSize: 12),
+        ),
+        for (final c in kCosmeticCatalog)
+          SwitchListTile(
+            title: Text(c.$2),
+            subtitle: Text(c.$3),
+            value: _cosmetics.contains(c.$1),
+            onChanged: (on) => _toggleCosmetic(c.$1, on),
+          ),
         const SizedBox(height: 8),
         const Text(
-          'Skeleton scope: one avatar (default_m_01), no cosmetics yet. '
-          'Handles are lowercase — 3–20 chars of a–z, 0–9 or _ (the node '
-          'adds the @ itself). Your sign is kept on this phone for now — '
-          'the node profile schema gains a sign field in a later daemon '
-          'update.',
+          'Skeleton scope: one avatar (default_m_01) and the first '
+          'cosmetics. Handles are lowercase — 3–20 chars of a–z, 0–9 '
+          'or _ (the node adds the @ itself). Your sign is kept on '
+          'this phone for now — the node profile schema gains a sign '
+          'field in a later daemon update.',
           style: TextStyle(fontSize: 12),
         ),
         const SizedBox(height: 16),
