@@ -49,6 +49,7 @@ class HaloStage extends StatelessWidget {
     required this.signName,
     required this.signGlyph,
     required this.onColorPicked,
+    this.cosmetics = const [],
   });
 
   final Color seed;
@@ -56,6 +57,11 @@ class HaloStage extends StatelessWidget {
   final String signName;
   final String signGlyph;
   final ValueChanged<Color> onColorPicked;
+
+  /// Equipped cosmetic item ids from the profile (e.g.
+  /// 'head_socket_crown'). The stage renders the ones it knows,
+  /// from the id — the profile carries ids, apps render them.
+  final List<String> cosmetics;
 
   @override
   Widget build(BuildContext context) {
@@ -79,7 +85,7 @@ class HaloStage extends StatelessWidget {
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
-          _BreathingHalo(seed: seed, glyph: signGlyph),
+          _BreathingHalo(seed: seed, glyph: signGlyph, cosmetics: cosmetics),
           const SizedBox(height: 14),
           Text(
             handle,
@@ -180,10 +186,12 @@ class _SwatchDot extends StatelessWidget {
 /// ring breathes — a slow scale + opacity cycle (4s) — and stills itself
 /// when the system asks for reduced motion.
 class _BreathingHalo extends StatefulWidget {
-  const _BreathingHalo({required this.seed, required this.glyph});
+  const _BreathingHalo(
+      {required this.seed, required this.glyph, required this.cosmetics});
 
   final Color seed;
   final String glyph;
+  final List<String> cosmetics;
 
   @override
   State<_BreathingHalo> createState() => _BreathingHaloState();
@@ -293,10 +301,122 @@ class _BreathingHaloState extends State<_BreathingHalo>
                   ),
                 ),
               ),
+              // Equipped head-socket cosmetic: the crown, worn on the
+              // portrait disc under the floating ring.
+              if (widget.cosmetics.contains('head_socket_crown'))
+                Positioned(
+                  top: 23,
+                  child: Transform.rotate(
+                    angle: -0.05,
+                    child: CustomPaint(
+                      key: const Key('cosmetic_head_socket_crown'),
+                      size: const Size(80, 46),
+                      painter: CrownPainter(gemColor: widget.seed),
+                    ),
+                  ),
+                ),
             ],
           );
         },
       ),
     );
   }
+}
+
+/// Paints the reference head-socket cosmetic — the crown from the
+/// signed pack omnimod.base.crown-01 (item head_socket_crown).
+/// Code-drawn from the cosmetic id, the way Plaza-Brawler paints
+/// fighter layers from their asset ids: the profile carries the id,
+/// the app renders it. The centre gem wears the person's own colour.
+class CrownPainter extends CustomPainter {
+  const CrownPainter({required this.gemColor});
+
+  final Color gemColor;
+
+  static const Color _gold = Color(0xFFE3B341);
+  static const Color _goldDark = Color(0xFFA8740A);
+  static const Color _goldLight = Color(0xFFF6D47A);
+  static const Color _teal = Color(0xFF35C4B5);
+  static const Color _rose = Color(0xFFF2547D);
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final w = size.width;
+    final cx = w / 2;
+
+    Path triangle(double centerX, double halfWidth, double base, double tip) =>
+        Path()
+          ..moveTo(centerX - halfWidth, base)
+          ..lineTo(centerX, tip)
+          ..lineTo(centerX + halfWidth, base)
+          ..close();
+
+    // Points, behind the band: centre tallest, sides shorter.
+    final points = Path()
+      ..addPath(triangle(cx, 12, 32, 6), Offset.zero)
+      ..addPath(triangle(cx - 24, 9.5, 32, 13), Offset.zero)
+      ..addPath(triangle(cx + 24, 9.5, 32, 13), Offset.zero);
+    canvas.drawPath(points, Paint()..color = _gold);
+    canvas.drawPath(
+        points,
+        Paint()
+          ..color = _goldDark
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = 1.2
+          ..strokeJoin = StrokeJoin.round);
+
+    // Orb tips on the three points.
+    final orb = Paint()..color = _goldLight;
+    canvas.drawCircle(Offset(cx, 6.5), 3.4, orb);
+    canvas.drawCircle(Offset(cx - 24, 13.5), 2.7, orb);
+    canvas.drawCircle(Offset(cx + 24, 13.5), 2.7, orb);
+
+    // The band: a shallow trapezoid, wider at the base, with a lit
+    // top rim and a shaded foot.
+    final band = Path()
+      ..moveTo(9, 30)
+      ..lineTo(w - 9, 30)
+      ..lineTo(w - 5, 44)
+      ..quadraticBezierTo(w - 5, 46, w - 9, 46)
+      ..lineTo(9, 46)
+      ..quadraticBezierTo(5, 46, 5, 44)
+      ..close();
+    canvas.drawPath(band, Paint()..color = _gold);
+    canvas.drawPath(
+        band,
+        Paint()
+          ..color = _goldDark
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = 1.2
+          ..strokeJoin = StrokeJoin.round);
+    final foot = Path()
+      ..moveTo(6.2, 41.5)
+      ..lineTo(w - 6.2, 41.5)
+      ..lineTo(w - 5, 44)
+      ..quadraticBezierTo(w - 5, 46, w - 9, 46)
+      ..lineTo(9, 46)
+      ..quadraticBezierTo(5, 46, 5, 44)
+      ..close();
+    canvas.drawPath(foot, Paint()..color = _goldDark.withOpacity(0.55));
+    canvas.drawLine(const Offset(10, 31.2), Offset(w - 10, 31.2),
+        Paint()..color = _goldLight..strokeWidth = 1.6);
+
+    // Gems: the centre stone is a diamond in the person's colour,
+    // flanked by teal and rose.
+    final gem = Path()
+      ..moveTo(cx, 31.5)
+      ..lineTo(cx + 5.5, 37)
+      ..lineTo(cx, 42.5)
+      ..lineTo(cx - 5.5, 37)
+      ..close();
+    canvas.drawPath(gem, Paint()..color = gemColor);
+    canvas.drawCircle(Offset(cx - 1.6, 35.2), 1.1,
+        Paint()..color = Colors.white.withOpacity(0.85));
+    canvas.drawCircle(Offset(cx - 21, 37), 3.1, Paint()..color = _teal);
+    canvas.drawCircle(Offset(cx + 21, 37), 3.1, Paint()..color = _rose);
+  }
+
+  @override
+  bool shouldRepaint(CrownPainter oldDelegate) =>
+      oldDelegate.gemColor != gemColor;
 }
