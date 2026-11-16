@@ -14,6 +14,8 @@ import 'package:flutter/services.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:omni_core_ui/omni_core_ui.dart';
 
+import 'halo_appearance.dart';
+import 'halo_render.dart';
 import 'halo_stage.dart';
 import 'lpe_api.dart';
 import 'lpe_identity.dart';
@@ -104,6 +106,12 @@ class _LpeHomeState extends State<LpeHome> {
   Color _favorite = kDefaultHaloColor;
   List<String> _cosmetics = [];
 
+  /// The Slice 2 look (skin / hair / clothing variants). Phone-local
+  /// only: the daemon profile schema is strict and carries no
+  /// appearance fields, so this never rides the profile payload — it
+  /// persists beside the cosmetics fallback under its own storage key.
+  HaloAppearance _appearance = HaloAppearance.defaultFor('male');
+
   final _tokenCtrl = TextEditingController();
   final _handleCtrl = TextEditingController();
   final _ambientCtrl = TextEditingController();
@@ -132,6 +140,10 @@ class _LpeHomeState extends State<LpeHome> {
     final cos = await _storage.read(key: 'lpe_cosmetics');
     if (cos != null && cos.isNotEmpty) {
       _cosmetics = cos.split(',').where((s) => s.isNotEmpty).toList();
+    }
+    final app = await _storage.read(key: 'lpe_appearance');
+    if (app != null && app.isNotEmpty) {
+      _appearance = HaloAppearance.decode(app);
     }
     if (fav != null) {
       final v = int.tryParse(fav);
@@ -336,6 +348,13 @@ class _LpeHomeState extends State<LpeHome> {
     _storage.write(key: 'lpe_cosmetics', value: _cosmetics.join(','));
   }
 
+  /// Applies a new Slice 2 look from the choosers and persists it
+  /// phone-locally (see [_appearance]).
+  void _setAppearance(HaloAppearance next) {
+    setState(() => _appearance = next);
+    _storage.write(key: 'lpe_appearance', value: next.encode());
+  }
+
   /// Equips or unequips a cosmetic by its pack item id. The change is
   /// local until the next profile save posts the cosmetics list.
   void _toggleCosmetic(String id, bool on) {
@@ -419,6 +438,8 @@ class _LpeHomeState extends State<LpeHome> {
           signGlyph: _signData.$3,
           onColorPicked: _pickColor,
           cosmetics: _cosmetics,
+          appearance: _appearance,
+          framing: HaloFraming.portrait,
         ),
         const SizedBox(height: 12),
         Card(
@@ -486,6 +507,8 @@ class _LpeHomeState extends State<LpeHome> {
           signGlyph: _signData.$3,
           onColorPicked: _pickColor,
           cosmetics: _cosmetics,
+          appearance: _appearance,
+          framing: HaloFraming.fullBody,
         ),
         const SizedBox(height: 16),
         Center(
@@ -530,6 +553,21 @@ class _LpeHomeState extends State<LpeHome> {
           ),
         ),
         const SizedBox(height: 16),
+        Text('Appearance',
+            style: Theme.of(context).textTheme.titleMedium),
+        const SizedBox(height: 4),
+        const Text(
+          'Your Halo\'s basic look — baked renders of the default '
+          'characters, customised by recipe. Kept on this phone; the '
+          'node profile carries your cosmetics, not your look (yet).',
+          style: TextStyle(fontSize: 12),
+        ),
+        const SizedBox(height: 12),
+        AppearanceChoosers(
+          appearance: _appearance,
+          onChanged: _setAppearance,
+        ),
+        const SizedBox(height: 24),
         Text('Cosmetics',
             style: Theme.of(context).textTheme.titleSmall),
         const SizedBox(height: 4),
@@ -548,8 +586,10 @@ class _LpeHomeState extends State<LpeHome> {
           ),
         const SizedBox(height: 8),
         const Text(
-          'Skeleton scope: one avatar (default_m_01) and the first '
-          'cosmetics. Handles are lowercase — 3–20 chars of a–z, 0–9 '
+          'Skeleton scope: the profile still posts avatar '
+          'default_m_01; your appearance above is rendered locally '
+          'from the bakes and kept on this phone. Handles are '
+          'lowercase — 3–20 chars of a–z, 0–9 '
           'or _ (the node adds the @ itself). Your sign is kept on '
           'this phone for now — the node profile schema gains a sign '
           'field in a later daemon update.',

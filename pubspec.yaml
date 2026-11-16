@@ -26,3 +26,10 @@ dev_dependencies:
 
 flutter:
   uses-material-design: true
+  # Baked Halo renders (P1–P3): variant/portrait stills and idle frames
+  # as quality-90 JPEG — the bake PNGs are fully opaque (verified alpha
+  # 255 throughout), so JPEG carries the same pixels at ~1/20 the size;
+  # the two crown sprites keep PNG for their transparency. 182 files,
+  # ~3.7 MB total.
+  assets:
+    - assets/halo/
