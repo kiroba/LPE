@@ -8,6 +8,9 @@
 // themes every Omni app through Omni-Core-UI.
 import 'package:flutter/material.dart';
 
+import 'halo_appearance.dart';
+import 'halo_render.dart';
+
 /// The app-local theme seed store key and its default (a deep violet-blue —
 /// the night the first Halo was sealed).
 const String kHaloColorKey = 'lpe_favorite_color';
@@ -50,6 +53,8 @@ class HaloStage extends StatelessWidget {
     required this.signGlyph,
     required this.onColorPicked,
     this.cosmetics = const [],
+    this.appearance,
+    this.framing = HaloFraming.portrait,
   });
 
   final Color seed;
@@ -62,6 +67,15 @@ class HaloStage extends StatelessWidget {
   /// 'head_socket_crown'). The stage renders the ones it knows,
   /// from the id — the profile carries ids, apps render them.
   final List<String> cosmetics;
+
+  /// The Halo's Slice 2 look (P4). When set, the hero is the baked
+  /// render for this appearance (see halo_render.dart); the code-drawn
+  /// disc below remains the fallback if a bake fails to load, and the
+  /// whole stage when no appearance is given.
+  final HaloAppearance? appearance;
+
+  /// Portrait (Home: bust bake) or full body (Creator: three-quarter).
+  final HaloFraming framing;
 
   @override
   Widget build(BuildContext context) {
@@ -85,7 +99,16 @@ class HaloStage extends StatelessWidget {
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
-          _BreathingHalo(seed: seed, glyph: signGlyph, cosmetics: cosmetics),
+          if (appearance == null)
+            _BreathingHalo(seed: seed, glyph: signGlyph, cosmetics: cosmetics)
+          else
+            HaloRenderView(
+              appearance: appearance!,
+              framing: framing,
+              crownEquipped: cosmetics.contains('head_socket_crown'),
+              fallback: _BreathingHalo(
+                  seed: seed, glyph: signGlyph, cosmetics: cosmetics),
+            ),
           const SizedBox(height: 14),
           Text(
             handle,
@@ -419,4 +442,139 @@ class CrownPainter extends CustomPainter {
   @override
   bool shouldRepaint(CrownPainter oldDelegate) =>
       oldDelegate.gemColor != gemColor;
+}
+
+// ---------------------------------------------------------------------------
+// AppearanceChoosers — the Slice 2 free-basics choosers for the Creator
+// tab (spec §2): base model, skin tone, shirt / pants / shoe colour,
+// hair colour, hair style. FREE means free: no locks, no prices, no
+// tier — every chip is tappable. Each value names a rebaked render
+// (P3); picking one updates the appearance and the stage follows the
+// display rule in halo_appearance.dart. (Lives in this file rather
+// than its own so the P4 change adds no new material.dart import —
+// see halo_render.dart's import note.)
+// ---------------------------------------------------------------------------
+
+/// UI swatch-dot colours per axis value. These are picker chrome only —
+/// approximations so a chip can show a dot; the actual look is always
+/// the baked render, never a tint derived from these.
+const Map<String, Map<String, Color>> _kSwatches = {
+  'skin': {
+    '1': Color(0xFFE8C6AA),
+    '2': Color(0xFFCB9874),
+    '3': Color(0xFFA87654),
+    '4': Color(0xFF805438),
+    '5': Color(0xFF69462F),
+  },
+  'shirt': {
+    'blue': Color(0xFF3E4861),
+    'forest': Color(0xFF3F6B35),
+    'rust': Color(0xFFB45A32),
+    'plum': Color(0xFF7A4A7E),
+    'charcoal': Color(0xFF3A3A3E),
+    'cream': Color(0xFFE8DFC8),
+  },
+  'pants': {
+    'indigo': Color(0xFF46586E),
+    'black': Color(0xFF1C1C1E),
+    'khaki': Color(0xFFB8A67E),
+    'grey': Color(0xFF8A8D90),
+    'olive': Color(0xFF6B7038),
+  },
+  'shoes': {
+    'brown': Color(0xFF7A4A28),
+    'black': Color(0xFF17171A),
+    'white': Color(0xFFEDEDE8),
+    'grey': Color(0xFF8A8D90),
+    'red': Color(0xFFC03A30),
+  },
+  'hairColor': {
+    'black': Color(0xFF141216),
+    'darkbrown': Color(0xFF3A241A),
+    'brown': Color(0xFF6B4226),
+    'auburn': Color(0xFFA85A28),
+    'blonde': Color(0xFFD9B878),
+    'grey': Color(0xFFB9B9BC),
+  },
+};
+
+class AppearanceChoosers extends StatelessWidget {
+  const AppearanceChoosers({
+    super.key,
+    required this.appearance,
+    required this.onChanged,
+  });
+
+  final HaloAppearance appearance;
+  final ValueChanged<HaloAppearance> onChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    final model = appearance.baseModel;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text('Base model', style: Theme.of(context).textTheme.titleSmall),
+        const SizedBox(height: 8),
+        Wrap(
+          spacing: 8,
+          runSpacing: 8,
+          children: [
+            ChoiceChip(
+              label: const Text('Male'),
+              selected: model == 'male',
+              onSelected: (_) =>
+                  onChanged(HaloAppearance.defaultFor('male')),
+            ),
+            ChoiceChip(
+              label: const Text('Female'),
+              selected: model == 'female',
+              onSelected: (_) =>
+                  onChanged(HaloAppearance.defaultFor('female')),
+            ),
+          ],
+        ),
+        const SizedBox(height: 4),
+        const Text(
+          'Switching the base model starts that model from its shipped '
+          'look.',
+          style: TextStyle(fontSize: 12),
+        ),
+        for (final axis in kHaloAxes) ...[
+          const SizedBox(height: 16),
+          Text(kHaloAxisLabels[axis]!,
+              style: Theme.of(context).textTheme.titleSmall),
+          const SizedBox(height: 8),
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: [
+              for (final value in haloAxisValues(model, axis))
+                ChoiceChip(
+                  avatar: _dot(axis, value),
+                  label: Text(haloAxisValueLabel(axis, value)),
+                  selected: appearance.valueOf(axis) == value,
+                  onSelected: (_) =>
+                      onChanged(appearance.withAxis(axis, value)),
+                ),
+            ],
+          ),
+        ],
+        const SizedBox(height: 12),
+        const Text(
+          'Every option here is free — these are the basic recipe '
+          'variants of your Halo, baked from the same master. One bake '
+          'shows one change at a time: the stage shows your most '
+          'recent change (layered bakes come later).',
+          style: TextStyle(fontSize: 12),
+        ),
+      ],
+    );
+  }
+
+  Widget? _dot(String axis, String value) {
+    final color = _kSwatches[axis]?[value];
+    if (color == null) return null;
+    return CircleAvatar(backgroundColor: color, radius: 8);
+  }
 }
