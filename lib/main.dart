@@ -97,6 +97,15 @@ class _LpeHomeState extends State<LpeHome> {
 
   int _tab = 0;
   StargateIdentity? _identity;
+
+  /// The standard node wiring (Omni-Core-UI v0.1.4), landed in L1:
+  /// constructed and probed once the identity loads; routes nothing yet —
+  /// LpeApi still owns the probe, the profile read and the signed profile
+  /// write. L2 routes the node check through the wiring; the profile
+  /// endpoints stay LpeApi's (a dedicated person-signed contract, not the
+  /// delegate append).
+  OmniNodeWiring? wiring;
+  final LocalEventStore _eventStore = LocalEventStore();
   Map<String, dynamic>? _profile;
   String _status = 'Loading your identity…';
   bool _busy = false;
@@ -161,6 +170,14 @@ class _LpeHomeState extends State<LpeHome> {
       _identity = identity;
       _status = 'Identity loaded. Checking your node…';
     });
+    final nodeToken = _tokenCtrl.text.trim();
+    wiring = OmniNodeWiring(
+      appContext: 'lpe',
+      store: _eventStore,
+      hub: OmniHubClient(
+          host: _host, token: nodeToken.isEmpty ? null : nodeToken),
+    );
+    await wiring!.initializeNode();
     await _refreshProfile();
   }
 
