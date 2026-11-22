@@ -49,28 +49,11 @@ class LpeApi {
         queryParameters: query,
       );
 
-  /// Node health via the telemetry port, like OmniHubClient's check.
-  /// The phone node requires the local token on :9100 too (the daemon's
-  /// remote_gate covers both servers), so the probe sends it.
-  Future<bool> nodeHealthy() async => await probeNode() == NodeProbe.ok;
-
-  /// Three honest answers, not one misleading one: a node that answers 401
-  /// is RUNNING — it is the token it is rejecting, and the UI must say so.
-  Future<NodeProbe> probeNode() async {
-    try {
-      final res = await http
-          .get(_uri(telemetryPort, '/api/v1/telemetry/node-health'),
-              headers: _headers)
-          .timeout(const Duration(seconds: 3));
-      if (res.statusCode == 200) return NodeProbe.ok;
-      if (res.statusCode == 401 || res.statusCode == 403) {
-        return NodeProbe.unauthorized;
-      }
-      return NodeProbe.unreachable;
-    } catch (_) {
-      return NodeProbe.unreachable;
-    }
-  }
+  // The node probe used to live here as a hand-rolled three-state check.
+  // Since L2 it is the standard wiring's probe (OmniNodeWiring over
+  // OmniHubClient, Omni-Core-UI) — the same honest states (answering /
+  // token rejected / not answering), one implementation across apps.
+  // This client keeps only the profile endpoints, its own contract.
 
   /// The stored profile for [pubkey], or null (no node, no profile, refused).
   Future<Map<String, dynamic>?> getProfile(String pubkey) async {
@@ -139,7 +122,3 @@ class LpeApi {
     }
   }
 }
-
-/// Result of [LpeApi.probeNode]: the node answered, the node answered but
-/// rejected the local token, or nothing is listening at all.
-enum NodeProbe { ok, unauthorized, unreachable }

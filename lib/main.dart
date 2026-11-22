@@ -98,14 +98,28 @@ class _LpeHomeState extends State<LpeHome> {
   int _tab = 0;
   StargateIdentity? _identity;
 
-  /// The standard node wiring (Omni-Core-UI v0.1.4), landed in L1:
-  /// constructed and probed once the identity loads; routes nothing yet —
-  /// LpeApi still owns the probe, the profile read and the signed profile
-  /// write. L2 routes the node check through the wiring; the profile
+  /// The standard node wiring (Omni-Core-UI v0.1.4). L1 landed it; L2
+  /// routes the node check through it (see [_testNode]). The profile
   /// endpoints stay LpeApi's (a dedicated person-signed contract, not the
   /// delegate append).
   OmniNodeWiring? wiring;
   final LocalEventStore _eventStore = LocalEventStore();
+
+  /// (Re)builds the wiring from the CURRENT settings fields, so a probe
+  /// never runs against a stale host/token: the hub is swapped in place
+  /// when the wiring already exists (the KickBack stale-probe lesson —
+  /// the app drives the wiring's freshness, the wiring does not guess).
+  OmniNodeWiring _wireUp() {
+    final t = _tokenCtrl.text.trim();
+    final hub = OmniHubClient(host: _host, token: t.isEmpty ? null : t);
+    final w = wiring;
+    if (w == null) {
+      return wiring =
+          OmniNodeWiring(appContext: 'lpe', store: _eventStore, hub: hub);
+    }
+    w.hub = hub;
+    return w;
+  }
   Map<String, dynamic>? _profile;
   String _status = 'Loading your identity…';
   bool _busy = false;
@@ -170,14 +184,7 @@ class _LpeHomeState extends State<LpeHome> {
       _identity = identity;
       _status = 'Identity loaded. Checking your node…';
     });
-    final nodeToken = _tokenCtrl.text.trim();
-    wiring = OmniNodeWiring(
-      appContext: 'lpe',
-      store: _eventStore,
-      hub: OmniHubClient(
-          host: _host, token: nodeToken.isEmpty ? null : nodeToken),
-    );
-    await wiring!.initializeNode();
+    await _wireUp().initializeNode();
     await _refreshProfile();
   }
 
@@ -217,19 +224,19 @@ class _LpeHomeState extends State<LpeHome> {
       _busy = true;
       _status = 'Pinging your node…';
     });
-    final probe = await _api.probeNode();
+    final conn = await _wireUp().probeConnection();
     if (!mounted) return;
     setState(() {
       _busy = false;
-      _status = switch (probe) {
-        NodeProbe.ok => 'Node is answering on $_host.',
-        NodeProbe.unauthorized =>
+      _status = switch (conn.state) {
+        HubConnectionState.connected => 'Node is answering on $_host.',
+        HubConnectionState.unauthorized || HubConnectionState.forbidden =>
           'Node is running on $_host but rejected the token — paste the local token from Omni Node, Save settings, then test again.',
-        NodeProbe.unreachable =>
+        HubConnectionState.unreachable || HubConnectionState.error =>
           'Node not answering — is Omni Node running on $_host?',
       };
     });
-    if (probe == NodeProbe.ok) await _refreshProfile();
+    if (conn.connected) await _refreshProfile();
   }
 
   /// Copies this identity's transfer code to the clipboard, after a warning:
