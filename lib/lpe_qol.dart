@@ -50,6 +50,61 @@ String relativeAgo(DateTime then, DateTime now) {
   return '${d.inDays} d ago';
 }
 
+/// How long the Halo waits between unprompted (ambient) lines, and how
+/// long a speech bubble — tapped or ambient — stays up. Ambient speech
+/// is deliberately sparse: Masters' lobby feels alive because its
+/// characters talk occasionally, not constantly.
+const Duration kAmbientSpeechInterval = Duration(seconds: 45);
+const Duration kSpeechBubbleVisible = Duration(milliseconds: 4500);
+
+/// The node clause of the Halo's speech, in its own voice — how the
+/// connection feels from inside the persona. [reach] / [isLoopback]
+/// mean the same as in [nodePlainLine]; every variant states only what
+/// the last probe actually established.
+String haloNodeBit({required NodeReach reach, required bool isLoopback}) {
+  switch (reach) {
+    case NodeReach.connected:
+      return isLoopback
+          ? 'Your node is right here with me — we\'re synced.'
+          : 'Your laptop node is humming — we\'re synced.';
+    case NodeReach.searching:
+      return 'Listening for your node…';
+    case NodeReach.rejected:
+      return 'Your node answered, but it doesn\'t trust this app yet.';
+    case NodeReach.unreachable:
+      return 'No node in earshot right now.';
+    case NodeReach.unknown:
+      return 'Still waking up…';
+  }
+}
+
+/// The Halo's ambient (unprompted) lines, in rotation order. Every line
+/// is built from real state only: the Halo's sign and the node clause
+/// (see [haloNodeBit]), the ambient activity the person themselves set
+/// for the Plaza (included only when set), and the crown (included
+/// only when it is actually equipped). Nothing here claims an event or
+/// a status the app has not established.
+List<String> haloAmbientLines({
+  required String signName,
+  required String nodeBit,
+  required String ambientActivity,
+  required bool crownEquipped,
+}) {
+  final activity = ambientActivity.trim();
+  return [
+    '$signName sign, standing by. $nodeBit',
+    if (activity.isNotEmpty) 'Plaza status: $activity',
+    if (crownEquipped) 'The crown still suits me.',
+    'I\'m here whenever you need me.',
+  ];
+}
+
+/// Picks the ambient line for rotation step [tick]: cycles through
+/// [lines] in order and wraps. An empty pool yields an empty line
+/// (the caller treats that as "stay quiet").
+String pickAmbientLine(List<String> lines, int tick) =>
+    lines.isEmpty ? '' : lines[tick % lines.length];
+
 /// The Node tab's headline, in plain language. [lastOkAt] is when a
 /// probe last succeeded (null if none has); [isLoopback] distinguishes
 /// the on-device node from a hub the person named (their laptop).
