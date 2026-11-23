@@ -107,7 +107,7 @@ class _LpeHomeState extends State<LpeHome> {
   NodeReach _nodeReach = NodeReach.unknown;
   DateTime? _lastNodeOkAt;
 
-  /// Tap-the-Halo speech (Item 0, Masters EX reference): whether the
+  /// Tap-the-Halo speech (Item 0): whether the
   /// name tag + dialogue line is showing, and a sequence counter so a
   /// stale auto-hide timer never dismisses a newer line.
   bool _haloSpeaking = false;
@@ -118,8 +118,8 @@ class _LpeHomeState extends State<LpeHome> {
   /// rotated line from the pool — see [_ambientSpeak]).
   String _speechLine = '';
 
-  /// Ambient speech (Masters refinement 1): a periodic timer that lets
-  /// the Halo speak unprompted, the way Masters' lobby characters
+  /// Ambient speech (refinement 1): a periodic timer that lets the
+  /// Halo speak unprompted, the way characters in a living place
   /// bubble-talk on their own. [_ambientTick] is the rotation step
   /// into the line pool; [_sheetOpen] suppresses ambient lines while
   /// any modal sheet is up.
@@ -693,7 +693,7 @@ class _LpeHomeState extends State<LpeHome> {
     );
   }
 
-  /// Tapping the Halo (Item 0, Masters EX dialogue style): surface
+  /// Tapping the Halo (Item 0, dialogue style): surface
   /// its name tag + one line in its own voice, then let it fade.
   void _tapHalo() => _showSpeech(_haloLine);
 
@@ -815,7 +815,7 @@ class _LpeHomeState extends State<LpeHome> {
 
   void _showCustomizeSheet() {
     // The selected chooser tab is sheet-local state, captured here so
-    // it survives the sheet's own rebuilds (Masters refinement 3).
+    // it survives the sheet's own rebuilds (refinement 3).
     var tab = 0;
     _openSheet((setSheet) => ListView(
           padding: const EdgeInsets.fromLTRB(16, 4, 16, 24),
@@ -947,8 +947,8 @@ class _LpeHomeState extends State<LpeHome> {
         ));
   }
 
-  /// The Customize sheet's appearance panel, Masters Trainer Settings
-  /// style (refinement 3): category tabs across the top — Model, Skin,
+  /// The Customize sheet's appearance panel (refinement 3):
+  /// category tabs across the top — Model, Skin,
   /// Hair, Top, Bottom, Shoes, using the app's own axis names — and
   /// the selected category's choosers in a panel below, instead of one
   /// long scroll of every axis. The sections are the same
@@ -1051,10 +1051,10 @@ class _LpeHomeState extends State<LpeHome> {
         padding: const EdgeInsets.fromLTRB(16, 4, 16, 24),
         children: [
           _statusLine(),
-          // Header band (Masters Profile layout, refinement 2): the
+          // Header band (Profile layout, refinement 2): the
           // sign-glyph avatar, handle and sign, and the identity short
-          // id this sheet has always shown — now with the copy
-          // affordance Masters puts beside the id. It copies the
+          // id this sheet has always shown — now with a copy
+          // affordance beside the id. It copies the
           // PUBLIC key, which is safe to share; the seed-bearing
           // transfer code stays behind its warning dialog below.
           Container(
@@ -1120,8 +1120,8 @@ class _LpeHomeState extends State<LpeHome> {
             ),
           ),
           const SizedBox(height: 12),
-          // Edit Look sits on the Profile screen in Masters; here it
-          // closes Profile and opens the Customize sheet.
+          // Edit Look sits on the Profile screen; here it closes
+          // Profile and opens the Customize sheet.
           FilledButton.tonalIcon(
             onPressed: () {
               Navigator.of(context).pop();
