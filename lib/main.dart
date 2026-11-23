@@ -9,6 +9,8 @@
 // The profile lives on the user's own Omni Node (daemon 8.25+), written as a
 // person-signed event (POST /api/lpe/profile). This app holds no server and
 // phones nothing home: it talks to 127.0.0.1, or to the hub the user names.
+import 'dart:math';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
@@ -19,6 +21,7 @@ import 'halo_render.dart';
 import 'halo_stage.dart';
 import 'lpe_api.dart';
 import 'lpe_identity.dart';
+import 'lpe_qol.dart';
 
 const List<(String, String, String)> kSigns = [
   ('aries', 'Aries', '♈'),
@@ -95,8 +98,19 @@ class _LpeHomeState extends State<LpeHome> {
     aOptions: AndroidOptions(encryptedSharedPreferences: true),
   );
 
-  int _tab = 0;
   StargateIdentity? _identity;
+
+  /// Node tab plain-language state (QoL item 4): how the last probe
+  /// went and when one last succeeded, mapped from the wiring's
+  /// HubConnectionState by [_recordProbe].
+  NodeReach _nodeReach = NodeReach.unknown;
+  DateTime? _lastNodeOkAt;
+
+  /// Tap-the-Halo speech (Item 0, Masters EX reference): whether the
+  /// name tag + dialogue line is showing, and a sequence counter so a
+  /// stale auto-hide timer never dismisses a newer line.
+  bool _haloSpeaking = false;
+  int _speechSeq = 0;
 
   /// The standard node wiring (Omni-Core-UI v0.1.4). L1 landed it; L2
   /// routes the node check through it (see [_testNode]). The profile
@@ -120,6 +134,7 @@ class _LpeHomeState extends State<LpeHome> {
     w.hub = hub;
     return w;
   }
+
   Map<String, dynamic>? _profile;
   String _status = 'Loading your identity…';
   bool _busy = false;
@@ -185,7 +200,58 @@ class _LpeHomeState extends State<LpeHome> {
       _status = 'Identity loaded. Checking your node…';
     });
     await _wireUp().initializeNode();
+    final conn = wiring?.lastConnection;
+    if (conn != null && mounted) {
+      setState(() => _recordProbe(conn));
+    }
     await _refreshProfile();
+  }
+
+  /// Maps a wiring probe result onto the plain-language Node state
+  /// (QoL item 4). A success also stamps [_lastNodeOkAt], which the
+  /// node pill turns into "synced N min ago".
+  void _recordProbe(HubConnection conn) {
+    _nodeReach = switch (conn.state) {
+      HubConnectionState.connected => NodeReach.connected,
+      HubConnectionState.unauthorized ||
+      HubConnectionState.forbidden =>
+        NodeReach.rejected,
+      HubConnectionState.unreachable ||
+      HubConnectionState.error =>
+        NodeReach.unreachable,
+    };
+    if (conn.connected) _lastNodeOkAt = DateTime.now();
+  }
+
+  bool get _isLoopback =>
+      _host == '127.0.0.1' || _host == 'localhost' || _host == '::1';
+
+  /// The Node pill / Node sheet headline (QoL item 4).
+  String get _nodeHeadline => _busy && _nodeReach == NodeReach.searching
+      ? 'Searching for your node…'
+      : nodePlainLine(
+          reach: _nodeReach,
+          isLoopback: _isLoopback,
+          lastOkAt: _lastNodeOkAt,
+          now: DateTime.now(),
+        );
+
+  /// The raw probe detail kept under the plain-language headline, so
+  /// nothing diagnostic is lost (QoL item 4).
+  String get _nodeRawDetail {
+    final probe = wiring?.lastProbe;
+    final conn = wiring?.lastConnection;
+    if (probe == null && conn == null) return 'No probe has run yet.';
+    final lines = <String>[
+      'Host: $_host',
+      if (conn != null) 'Probe state: ${conn.state.name}',
+      if (probe != null) probe.statusMessage,
+      if (probe?.daemonVersion != null)
+        'Daemon version: ${probe!.daemonVersion}',
+      if (probe?.nodeId != null) 'Node id: ${probe!.nodeId}',
+      if (probe != null) 'Peers: ${probe.peerCount}',
+    ];
+    return lines.join('\n');
   }
 
   Future<void> _refreshProfile() async {
@@ -222,17 +288,21 @@ class _LpeHomeState extends State<LpeHome> {
   Future<void> _testNode() async {
     setState(() {
       _busy = true;
+      _nodeReach = NodeReach.searching;
       _status = 'Pinging your node…';
     });
     final conn = await _wireUp().probeConnection();
     if (!mounted) return;
     setState(() {
+      _recordProbe(conn);
       _busy = false;
       _status = switch (conn.state) {
         HubConnectionState.connected => 'Node is answering on $_host.',
-        HubConnectionState.unauthorized || HubConnectionState.forbidden =>
+        HubConnectionState.unauthorized ||
+        HubConnectionState.forbidden =>
           'Node is running on $_host but rejected the token — paste the local token from Omni Node, Save settings, then test again.',
-        HubConnectionState.unreachable || HubConnectionState.error =>
+        HubConnectionState.unreachable ||
+        HubConnectionState.error =>
           'Node not answering — is Omni Node running on $_host?',
       };
     });
@@ -273,8 +343,7 @@ class _LpeHomeState extends State<LpeHome> {
       setState(() => _status = 'No identity seed found to export.');
       return;
     }
-    await Clipboard.setData(
-        ClipboardData(text: identityTransferCode(seed)));
+    await Clipboard.setData(ClipboardData(text: identityTransferCode(seed)));
     setState(() => _status =
         'Transfer code copied — paste it into Plaza-Brawler > Settings > Identity transfer.');
   }
@@ -292,23 +361,39 @@ class _LpeHomeState extends State<LpeHome> {
       context: context,
       builder: (ctx) => AlertDialog(
         title: const Text('Import an identity transfer code?'),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            const Text(
-                'This REPLACES the identity this install signs with. Any '
-                'profile this install\'s current key made stays on the node '
-                'under that old key. Paste only your own code.'),
-            const SizedBox(height: 12),
-            TextField(
-              controller: ctrl,
-              decoration: const InputDecoration(
-                labelText: 'Transfer code',
-                hintText: 'omni-seed-v1.…',
+        content: StatefulBuilder(
+          builder: (ctx, setDialogState) => Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Text(
+                  'This REPLACES the identity this install signs with. Any '
+                  'profile this install\'s current key made stays on the node '
+                  'under that old key. Paste only your own code.'),
+              const SizedBox(height: 12),
+              TextField(
+                controller: ctrl,
+                decoration: const InputDecoration(
+                  labelText: 'Transfer code',
+                  hintText: 'omni-seed-v1.…',
+                ),
+                maxLines: 3,
               ),
-              maxLines: 3,
-            ),
-          ],
+              const SizedBox(height: 8),
+              Align(
+                alignment: Alignment.centerLeft,
+                child: TextButton.icon(
+                  icon: const Icon(Icons.content_paste),
+                  label: const Text('Paste from clipboard'),
+                  onPressed: () async {
+                    final data = await Clipboard.getData('text/plain');
+                    final text = data?.text?.trim() ?? '';
+                    if (text.isEmpty) return;
+                    setDialogState(() => ctrl.text = text);
+                  },
+                ),
+              ),
+            ],
+          ),
         ),
         actions: [
           TextButton(
@@ -322,6 +407,7 @@ class _LpeHomeState extends State<LpeHome> {
         ],
       ),
     );
+    ctrl.dispose();
     if (code == null || !mounted) return;
     final seed = seedFromIdentityTransferCode(code);
     if (seed == null) {
@@ -333,6 +419,38 @@ class _LpeHomeState extends State<LpeHome> {
     if (!mounted) return;
     setState(() => _status =
         'Identity imported. Restart LPE to sign as the imported identity.');
+    await _offerRestartAfterImport();
+  }
+
+  /// After a successful import the app itself offers the restart the
+  /// import needs (QoL item 3): StargateIdentity caches its load, so
+  /// the imported seed only takes over on a fresh start. "Close LPE
+  /// now" exits the app so the person can reopen it as the imported
+  /// identity; "Later" leaves them where they are.
+  Future<void> _offerRestartAfterImport() async {
+    final close = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Identity imported — restart LPE?'),
+        content: const Text(
+            'The imported identity takes over the next time LPE starts. '
+            'Close LPE now and reopen it to sign as the imported '
+            'identity, or keep browsing and restart later.'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Later'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Close LPE now'),
+          ),
+        ],
+      ),
+    );
+    if (close == true) {
+      await SystemNavigator.pop();
+    }
   }
 
   Future<void> _saveProfile() async {
@@ -383,9 +501,8 @@ class _LpeHomeState extends State<LpeHome> {
   /// local until the next profile save posts the cosmetics list.
   void _toggleCosmetic(String id, bool on) {
     setState(() {
-      _cosmetics = on
-          ? [..._cosmetics, id]
-          : _cosmetics.where((c) => c != id).toList();
+      _cosmetics =
+          on ? [..._cosmetics, id] : _cosmetics.where((c) => c != id).toList();
     });
     _persistCosmetics();
   }
@@ -420,25 +537,210 @@ class _LpeHomeState extends State<LpeHome> {
   (String, String, String) get _signData =>
       kSigns.firstWhere((s) => s.$1 == _sign, orElse: () => kSigns.first);
 
+  // -- Item 0: full-screen Halo first, everything else behind modals --
+  //
+  // The landing surface is the Halo itself, full screen (Kiro's ruling,
+  // Nov 22, 2026 — it supersedes the old three-tab layout). Customize,
+  // Profile and Node live in modal bottom sheets opened from overlay
+  // controls; the app never navigates away to a settings page, and on
+  // launch it always lands here — Item 1's "reopen where you left off"
+  // restores the Halo's state (appearance, sign, color — all persisted
+  // phone-locally as before), never a sheet.
+
   @override
   Widget build(BuildContext context) {
-    final pages = [_homePage(), _creatorPage(), _connectPage()];
     return AnimatedTheme(
       data: haloTheme(_favorite),
       duration: const Duration(milliseconds: 600),
       child: Scaffold(
-      appBar: AppBar(title: const Text('LPE — your Halo')),
-      body: pages[_tab],
-      bottomNavigationBar: NavigationBar(
-        selectedIndex: _tab,
-        onDestinationSelected: (i) => setState(() => _tab = i),
-        destinations: const [
-          NavigationDestination(icon: Icon(Icons.home), label: 'Home'),
-          NavigationDestination(
-              icon: Icon(Icons.auto_fix_high), label: 'Creator'),
-          NavigationDestination(icon: Icon(Icons.hub), label: 'Node'),
-        ],
+        body: Stack(
+          children: [
+            Positioned.fill(
+              child: GestureDetector(
+                behavior: HitTestBehavior.translucent,
+                onTap: _tapHalo,
+                child: HaloStage(
+                  seed: _favorite,
+                  handle: _stageHandle,
+                  signName: _signData.$2,
+                  signGlyph: _signData.$3,
+                  onColorPicked: _pickColor,
+                  cosmetics: _cosmetics,
+                  appearance: _appearance,
+                  framing: HaloFraming.fullBody,
+                ),
+              ),
+            ),
+            // The Halo's speech bubble (name tag + one line), shown
+            // over the lower stage when the Halo is tapped.
+            if (_haloSpeaking)
+              Positioned(
+                left: 24,
+                right: 24,
+                bottom: 118,
+                child: _speechBubble(),
+              ),
+            // Top overlay: the plain-language node pill (Item 4). It
+            // taps open to the Node sheet with the full detail.
+            Positioned(
+              top: 0,
+              left: 0,
+              right: 0,
+              child: SafeArea(
+                child: Padding(
+                  padding: const EdgeInsets.fromLTRB(12, 8, 12, 0),
+                  child: Row(
+                    children: [
+                      Expanded(child: _nodePill()),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+            // Bottom overlay: status line + the modal openers.
+            Positioned(
+              left: 0,
+              right: 0,
+              bottom: 0,
+              child: SafeArea(
+                child: Padding(
+                  padding: const EdgeInsets.fromLTRB(12, 0, 12, 10),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Text(
+                        _status,
+                        style: Theme.of(context)
+                            .textTheme
+                            .bodySmall
+                            ?.copyWith(color: Colors.white70),
+                        textAlign: TextAlign.center,
+                      ),
+                      const SizedBox(height: 8),
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          FilledButton.tonalIcon(
+                            onPressed: _showCustomizeSheet,
+                            icon: const Icon(Icons.auto_fix_high),
+                            label: const Text('Customize'),
+                          ),
+                          const SizedBox(width: 10),
+                          FilledButton.tonalIcon(
+                            onPressed: _showProfileSheet,
+                            icon: const Icon(Icons.person),
+                            label: const Text('Profile'),
+                          ),
+                          const SizedBox(width: 10),
+                          IconButton.filledTonal(
+                            onPressed: _busy ? null : _importTransferCode,
+                            icon: const Icon(Icons.swap_horiz),
+                            tooltip: 'Import identity transfer code',
+                          ),
+                        ],
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          ],
+        ),
       ),
+    );
+  }
+
+  /// Tapping the Halo (Item 0, Masters EX dialogue style): surface
+  /// its name tag + one line in its own voice, then let it fade.
+  void _tapHalo() {
+    final seq = ++_speechSeq;
+    setState(() => _haloSpeaking = true);
+    Future.delayed(const Duration(milliseconds: 4500), () {
+      if (mounted && seq == _speechSeq) {
+        setState(() => _haloSpeaking = false);
+      }
+    });
+  }
+
+  /// The Halo's one dialogue line: who it is, and how the node feels
+  /// from inside the persona. Plain status, spoken as the Halo.
+  String get _haloLine {
+    final nodeBit = switch (_nodeReach) {
+      NodeReach.connected => _isLoopback
+          ? 'Your node is right here with me — we\'re synced.'
+          : 'Your laptop node is humming — we\'re synced.',
+      NodeReach.searching => 'Listening for your node…',
+      NodeReach.rejected =>
+        'Your node answered, but it doesn\'t trust this app yet.',
+      NodeReach.unreachable => 'No node in earshot right now.',
+      NodeReach.unknown => 'Still waking up…',
+    };
+    return '${_signData.$2} sign, standing by. $nodeBit';
+  }
+
+  Widget _speechBubble() {
+    return Material(
+      color: const Color(0xB8000000),
+      borderRadius: BorderRadius.circular(16),
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(14, 10, 14, 12),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(
+              _stageHandle,
+              style: TextStyle(
+                color: _favorite,
+                fontWeight: FontWeight.w700,
+                fontSize: 13,
+              ),
+            ),
+            const SizedBox(height: 3),
+            Text(
+              _haloLine,
+              style: const TextStyle(color: Colors.white, fontSize: 14),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// The node status pill: a colored dot + the plain-language headline.
+  Widget _nodePill() {
+    final dotColor = switch (_nodeReach) {
+      NodeReach.connected => Colors.greenAccent,
+      NodeReach.searching => Colors.amberAccent,
+      NodeReach.rejected => Colors.orangeAccent,
+      NodeReach.unreachable => Colors.redAccent,
+      NodeReach.unknown => Colors.white38,
+    };
+    return Material(
+      color: Colors.black45,
+      borderRadius: BorderRadius.circular(24),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(24),
+        onTap: _showNodeSheet,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 9),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(Icons.circle, size: 10, color: dotColor),
+              const SizedBox(width: 8),
+              Flexible(
+                child: Text(
+                  _nodeHeadline,
+                  style: const TextStyle(color: Colors.white, fontSize: 13),
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
+              const SizedBox(width: 6),
+              const Icon(Icons.hub, size: 16, color: Colors.white70),
+            ],
+          ),
+        ),
       ),
     );
   }
@@ -448,232 +750,297 @@ class _LpeHomeState extends State<LpeHome> {
         child: Text(_status, style: Theme.of(context).textTheme.bodySmall),
       );
 
-  Widget _homePage() {
-    final identity = _identity;
-    final profile = _profile;
-    return ListView(
-      padding: const EdgeInsets.all(16),
-      children: [
-        _statusLine(),
-        HaloStage(
-          seed: _favorite,
-          handle: _stageHandle,
-          signName: _signData.$2,
-          signGlyph: _signData.$3,
-          onColorPicked: _pickColor,
-          cosmetics: _cosmetics,
-          appearance: _appearance,
-          framing: HaloFraming.portrait,
+  /// Opens a modal bottom sheet at a fixed fraction of the screen, so
+  /// the Halo stays visible above it and keeps updating live while the
+  /// person works in the sheet.
+  void _openSheet(Widget Function(StateSetter setSheet) builder) {
+    showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      showDragHandle: true,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setSheet) => SizedBox(
+          height: MediaQuery.of(ctx).size.height * 0.78,
+          child: builder(setSheet),
         ),
-        const SizedBox(height: 12),
-        Card(
-          child: ListTile(
-            leading: CircleAvatar(
+      ),
+    );
+  }
+
+  // -- Customize sheet (the old Creator tab, behind a modal) ----------
+
+  void _showCustomizeSheet() {
+    _openSheet((setSheet) => ListView(
+          padding: const EdgeInsets.fromLTRB(16, 4, 16, 24),
+          children: [
+            _statusLine(),
+            TextField(
+              controller: _handleCtrl,
+              decoration: const InputDecoration(
+                labelText: 'Handle',
+                hintText: 'e.g. kiro_b',
+                border: OutlineInputBorder(),
+              ),
+            ),
+            const SizedBox(height: 12),
+            DropdownButtonFormField<String>(
+              value: _sign,
+              decoration: const InputDecoration(
+                labelText: 'Sign (your fighter\'s stats come from it)',
+                border: OutlineInputBorder(),
+              ),
+              items: [
+                for (final s in kSigns)
+                  DropdownMenuItem(
+                      value: s.$1, child: Text('${s.$3}  ${s.$2}')),
+              ],
+              onChanged: (v) {
+                if (v == null) return;
+                setState(() => _sign = v);
+                setSheet(() {});
+                // Item 1: the Customize state persists as it changes,
+                // not only when the profile is saved.
+                _storage.write(key: 'lpe_sign', value: v);
+              },
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: _ambientCtrl,
+              decoration: const InputDecoration(
+                labelText: 'Ambient activity (shown in the Plaza)',
+                hintText: 'e.g. Training in Plaza Center',
+                border: OutlineInputBorder(),
+              ),
+            ),
+            const SizedBox(height: 16),
+            Text('Appearance', style: Theme.of(context).textTheme.titleMedium),
+            const SizedBox(height: 4),
+            const Text(
+              'Your Halo\'s basic look — baked renders of the default '
+              'characters, customised by recipe. Kept on this phone; the '
+              'node profile carries your cosmetics, not your look (yet).',
+              style: TextStyle(fontSize: 12),
+            ),
+            const SizedBox(height: 12),
+            AppearanceChoosers(
+              appearance: _appearance,
+              onChanged: (a) {
+                _setAppearance(a);
+                setSheet(() {});
+              },
+            ),
+            const SizedBox(height: 16),
+            // Item 2: the fun buttons over the existing chooser sets.
+            Row(
+              children: [
+                FilledButton.tonalIcon(
+                  onPressed: () {
+                    _setAppearance(randomizedAppearance(_appearance, Random()));
+                    setSheet(() {});
+                  },
+                  icon: const Icon(Icons.casino),
+                  label: const Text('Randomize'),
+                ),
+                const SizedBox(width: 12),
+                OutlinedButton.icon(
+                  onPressed: _appearance.isDefaultLook
+                      ? null
+                      : () {
+                          _setAppearance(
+                              HaloAppearance.defaultFor(_appearance.baseModel));
+                          setSheet(() {});
+                        },
+                  icon: const Icon(Icons.restart_alt),
+                  label: const Text('Reset to default'),
+                ),
+              ],
+            ),
+            const SizedBox(height: 24),
+            Text('Cosmetics', style: Theme.of(context).textTheme.titleSmall),
+            const SizedBox(height: 4),
+            const Text(
+              'Equipment renders on your Halo from its pack item id and '
+              'saves with your profile. The crown is the reference cosmetic '
+              'from the signed pack omnimod.base.crown-01.',
+              style: TextStyle(fontSize: 12),
+            ),
+            for (final c in kCosmeticCatalog)
+              SwitchListTile(
+                title: Text(c.$2),
+                subtitle: Text(c.$3),
+                value: _cosmetics.contains(c.$1),
+                onChanged: (on) {
+                  _toggleCosmetic(c.$1, on);
+                  setSheet(() {});
+                },
+              ),
+            const SizedBox(height: 8),
+            const Text(
+              'Skeleton scope: the profile still posts avatar '
+              'default_m_01; your appearance above is rendered locally '
+              'from the bakes and kept on this phone. Handles are '
+              'lowercase — 3–20 chars of a–z, 0–9 '
+              'or _ (the node adds the @ itself). Your sign is kept on '
+              'this phone for now — the node profile schema gains a sign '
+              'field in a later daemon update.',
+              style: TextStyle(fontSize: 12),
+            ),
+            const SizedBox(height: 16),
+            FilledButton(
+              onPressed: _busy
+                  ? null
+                  : () async {
+                      await _saveProfile();
+                      setSheet(() {});
+                    },
+              child: const Text('Save my Halo to the node'),
+            ),
+          ],
+        ));
+  }
+
+  // -- Profile sheet (identity, progress, transfer codes) -------------
+
+  void _showProfileSheet() {
+    _openSheet((setSheet) {
+      final identity = _identity;
+      final profile = _profile;
+      return ListView(
+        padding: const EdgeInsets.fromLTRB(16, 4, 16, 24),
+        children: [
+          _statusLine(),
+          Center(
+            child: CircleAvatar(
+              radius: 44,
               backgroundColor: _auraColor,
               child: Text(_signData.$3,
-                  style: const TextStyle(color: Colors.white)),
+                  style: const TextStyle(fontSize: 40, color: Colors.white)),
             ),
-            title: Text(profile?['handle_display'] as String? ??
-                (identity == null ? '…' : 'No handle yet')),
-            subtitle: Text(identity == null
-                ? 'Loading identity…'
-                : 'Identity ${identity.shortId} · ${profile?['aura'] is Map ? (profile!['aura'] as Map)['tier'] ?? '' : 'no profile'}'),
           ),
-        ),
-        const SizedBox(height: 12),
-        if (profile == null)
+          const SizedBox(height: 12),
+          Card(
+            child: ListTile(
+              leading: CircleAvatar(
+                backgroundColor: _auraColor,
+                child: Text(_signData.$3,
+                    style: const TextStyle(color: Colors.white)),
+              ),
+              title: Text(profile?['handle_display'] as String? ??
+                  (identity == null ? '…' : 'No handle yet')),
+              subtitle: Text(identity == null
+                  ? 'Loading identity…'
+                  : 'Identity ${identity.shortId} · ${profile?['aura'] is Map ? (profile!['aura'] as Map)['tier'] ?? '' : 'no profile'}'),
+            ),
+          ),
+          const SizedBox(height: 12),
+          if (profile == null)
+            const Text(
+                'You have no Halo on this node yet. Open Customize, pick a handle and a sign, and save — Plaza-Brawler will offer your own character as your fighter.')
+          else
+            Text(
+                'XP ${profile['xp'] ?? 0} · Plaza credits ${profile['plaza_credits'] ?? 0}\n'
+                'Your fighter in Plaza-Brawler is built from this profile: your handle, your aura, stats from $_sign.'),
+          const SizedBox(height: 16),
+          FilledButton.tonal(
+            onPressed: _busy
+                ? null
+                : () async {
+                    await _refreshProfile();
+                    setSheet(() {});
+                  },
+            child: const Text('Refresh from node'),
+          ),
+          const SizedBox(height: 8),
+          OutlinedButton(
+            onPressed: _busy ? null : _copyTransferCode,
+            child: const Text('Copy identity transfer code'),
+          ),
+          const SizedBox(height: 8),
+          OutlinedButton(
+            onPressed: _busy ? null : _importTransferCode,
+            child: const Text('Import identity transfer code'),
+          ),
+          const SizedBox(height: 6),
           const Text(
-              'You have no Halo on this node yet. Open the Creator tab, pick a handle and a sign, and save — Plaza-Brawler will offer your own character as your fighter.')
-        else
-          Text(
-              'XP ${profile['xp'] ?? 0} · Plaza credits ${profile['plaza_credits'] ?? 0}\n'
-              'Your fighter in Plaza-Brawler is built from this profile: your handle, your aura, stats from $_sign.'),
-        const SizedBox(height: 16),
-        FilledButton.tonal(
-          onPressed: _busy ? null : _refreshProfile,
-          child: const Text('Refresh from node'),
-        ),
-        const SizedBox(height: 8),
-        OutlinedButton(
-          onPressed: _busy ? null : _copyTransferCode,
-          child: const Text('Copy identity transfer code'),
-        ),
-        const SizedBox(height: 8),
-        OutlinedButton(
-          onPressed: _busy ? null : _importTransferCode,
-          child: const Text('Import identity transfer code'),
-        ),
-        const SizedBox(height: 6),
-        const Text(
-          'Carries this identity into your other Omni apps on this phone — '
-          'Plaza-Brawler imports it in Settings, then fights as this Halo.',
-          style: TextStyle(fontSize: 12, color: Colors.black54),
-        ),
-        const SizedBox(height: 6),
-        const Text(
-          'Import restores an identity here — the recovery path if a reinstall '
-          'ever wipes this app and you hold the code in another app.',
-          style: TextStyle(fontSize: 12, color: Colors.black54),
-        ),
-      ],
-    );
+            'Carries this identity into your other Omni apps on this phone — '
+            'Plaza-Brawler imports it in Settings, then fights as this Halo.',
+            style: TextStyle(fontSize: 12, color: Colors.black54),
+          ),
+          const SizedBox(height: 6),
+          const Text(
+            'Import restores an identity here — the recovery path if a reinstall '
+            'ever wipes this app and you hold the code in another app.',
+            style: TextStyle(fontSize: 12, color: Colors.black54),
+          ),
+        ],
+      );
+    });
   }
 
-  Widget _creatorPage() {
-    return ListView(
-      padding: const EdgeInsets.all(16),
-      children: [
-        _statusLine(),
-        HaloStage(
-          seed: _favorite,
-          handle: _stageHandle,
-          signName: _signData.$2,
-          signGlyph: _signData.$3,
-          onColorPicked: _pickColor,
-          cosmetics: _cosmetics,
-          appearance: _appearance,
-          framing: HaloFraming.fullBody,
-        ),
-        const SizedBox(height: 16),
-        Center(
-          child: CircleAvatar(
-            radius: 44,
-            backgroundColor: _auraColor,
-            child: Text(_signData.$3,
-                style: const TextStyle(fontSize: 40, color: Colors.white)),
-          ),
-        ),
-        const SizedBox(height: 16),
-        TextField(
-          controller: _handleCtrl,
-          decoration: const InputDecoration(
-            labelText: 'Handle',
-            hintText: 'e.g. kiro_b',
-            border: OutlineInputBorder(),
-          ),
-        ),
-        const SizedBox(height: 12),
-        DropdownButtonFormField<String>(
-          value: _sign,
-          decoration: const InputDecoration(
-            labelText: 'Sign (your fighter\'s stats come from it)',
-            border: OutlineInputBorder(),
-          ),
-          items: [
-            for (final s in kSigns)
-              DropdownMenuItem(value: s.$1, child: Text('${s.$3}  ${s.$2}')),
-          ],
-          onChanged: (v) {
-            if (v != null) setState(() => _sign = v);
-          },
-        ),
-        const SizedBox(height: 12),
-        TextField(
-          controller: _ambientCtrl,
-          decoration: const InputDecoration(
-            labelText: 'Ambient activity (shown in the Plaza)',
-            hintText: 'e.g. Training in Plaza Center',
-            border: OutlineInputBorder(),
-          ),
-        ),
-        const SizedBox(height: 16),
-        Text('Appearance',
-            style: Theme.of(context).textTheme.titleMedium),
-        const SizedBox(height: 4),
-        const Text(
-          'Your Halo\'s basic look — baked renders of the default '
-          'characters, customised by recipe. Kept on this phone; the '
-          'node profile carries your cosmetics, not your look (yet).',
-          style: TextStyle(fontSize: 12),
-        ),
-        const SizedBox(height: 12),
-        AppearanceChoosers(
-          appearance: _appearance,
-          onChanged: _setAppearance,
-        ),
-        const SizedBox(height: 24),
-        Text('Cosmetics',
-            style: Theme.of(context).textTheme.titleSmall),
-        const SizedBox(height: 4),
-        const Text(
-          'Equipment renders on your Halo from its pack item id and '
-          'saves with your profile. The crown is the reference cosmetic '
-          'from the signed pack omnimod.base.crown-01.',
-          style: TextStyle(fontSize: 12),
-        ),
-        for (final c in kCosmeticCatalog)
-          SwitchListTile(
-            title: Text(c.$2),
-            subtitle: Text(c.$3),
-            value: _cosmetics.contains(c.$1),
-            onChanged: (on) => _toggleCosmetic(c.$1, on),
-          ),
-        const SizedBox(height: 8),
-        const Text(
-          'Skeleton scope: the profile still posts avatar '
-          'default_m_01; your appearance above is rendered locally '
-          'from the bakes and kept on this phone. Handles are '
-          'lowercase — 3–20 chars of a–z, 0–9 '
-          'or _ (the node adds the @ itself). Your sign is kept on '
-          'this phone for now — the node profile schema gains a sign '
-          'field in a later daemon update.',
-          style: TextStyle(fontSize: 12),
-        ),
-        const SizedBox(height: 16),
-        FilledButton(
-          onPressed: _busy ? null : _saveProfile,
-          child: const Text('Save my Halo to the node'),
-        ),
-      ],
-    );
-  }
+  // -- Node sheet (plain language first, raw detail underneath) -------
 
-  Widget _connectPage() {
-    return ListView(
-      padding: const EdgeInsets.all(16),
-      children: [
-        _statusLine(),
-        TextField(
-          decoration: const InputDecoration(
-            labelText: 'Node host',
-            hintText: '127.0.0.1',
-            border: OutlineInputBorder(),
-          ),
-          controller: TextEditingController(text: _host),
-          onChanged: (v) => _host = v.trim().isEmpty ? '127.0.0.1' : v.trim(),
-        ),
-        const SizedBox(height: 12),
-        TextField(
-          controller: _tokenCtrl,
-          obscureText: true,
-          decoration: const InputDecoration(
-            labelText: 'Node token',
-            hintText: 'Omni Node > Connect apps',
-            border: OutlineInputBorder(),
-          ),
-        ),
-        const SizedBox(height: 16),
-        Row(
+  void _showNodeSheet() {
+    _openSheet((setSheet) => ListView(
+          padding: const EdgeInsets.fromLTRB(16, 4, 16, 24),
           children: [
-            FilledButton.tonal(
-              onPressed: _busy ? null : _saveSettings,
-              child: const Text('Save settings'),
+            _statusLine(),
+            Text(_nodeHeadline, style: Theme.of(context).textTheme.titleMedium),
+            const SizedBox(height: 6),
+            // Item 4: the raw probe detail stays, underneath.
+            Text(_nodeRawDetail, style: Theme.of(context).textTheme.bodySmall),
+            const SizedBox(height: 16),
+            TextField(
+              decoration: const InputDecoration(
+                labelText: 'Node host',
+                hintText: '127.0.0.1',
+                border: OutlineInputBorder(),
+              ),
+              controller: TextEditingController(text: _host),
+              onChanged: (v) =>
+                  _host = v.trim().isEmpty ? '127.0.0.1' : v.trim(),
             ),
-            const SizedBox(width: 12),
-            FilledButton(
-              onPressed: _busy ? null : _testNode,
-              child: const Text('Test connection'),
+            const SizedBox(height: 12),
+            TextField(
+              controller: _tokenCtrl,
+              obscureText: true,
+              decoration: const InputDecoration(
+                labelText: 'Node token',
+                hintText: 'Omni Node > Connect apps',
+                border: OutlineInputBorder(),
+              ),
+            ),
+            const SizedBox(height: 16),
+            Row(
+              children: [
+                FilledButton.tonal(
+                  onPressed: _busy
+                      ? null
+                      : () async {
+                          await _saveSettings();
+                          setSheet(() {});
+                        },
+                  child: const Text('Save settings'),
+                ),
+                const SizedBox(width: 12),
+                FilledButton(
+                  onPressed: _busy
+                      ? null
+                      : () async {
+                          await _testNode();
+                          setSheet(() {});
+                        },
+                  child: const Text('Test connection'),
+                ),
+              ],
+            ),
+            const SizedBox(height: 12),
+            const Text(
+              'Loopback is open on your own device; the token matters for remote '
+              'hub mode. Ports are the standard Omni ones: 5000 (API) and 9100 '
+              '(telemetry).',
+              style: TextStyle(fontSize: 12),
             ),
           ],
-        ),
-        const SizedBox(height: 12),
-        const Text(
-          'Loopback is open on your own device; the token matters for remote '
-          'hub mode. Ports are the standard Omni ones: 5000 (API) and 9100 '
-          '(telemetry).',
-          style: TextStyle(fontSize: 12),
-        ),
-      ],
-    );
+        ));
   }
 }

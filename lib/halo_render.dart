@@ -185,14 +185,30 @@ class _HaloRenderViewState extends State<HaloRenderView>
     );
   }
 
+  /// CROWN SANITY PASS (QoL item 5, Nov 22, 2026): placement varies
+  /// only by model + framing — NOT per hairstyle — so the non-default
+  /// hairstyle bakes were measured against the default-hair bakes to
+  /// check that is safe. Method: silhouette head-top / head-centre
+  /// extraction over the 512×512 bake JPEGs (background-differenced,
+  /// centre band). Findings:
+  ///   portrait head-top: default-hair 0.176 (male) / 0.174 (female);
+  ///     short02 0.168, short03 0.168 (male); bob01 0.180, short01
+  ///     0.180 (female) — worst delta 0.008 ≈ 4 px.
+  ///   three-quarter head-top: default-hair 0.062 / 0.061; variants
+  ///     0.059–0.062 — worst delta 0.003 ≈ 1.5 px.
+  ///   head centre-x: portrait 0.476–0.498 vs placed 0.500; tq
+  ///     0.515–0.521 (hair-top sliver) vs placed 0.504 / 0.475.
+  ///   sprite aspect: code uses 0.852; crown_front.png measures
+  ///     0.853, crown_tq.png 0.851.
+  /// All deltas are inside the crown's own width (0.30–0.37 of canvas
+  /// in portrait), so the per-model placement below already sits
+  /// correctly on every non-default hairstyle. NO offset change was
+  /// made — inventing one would move a tuned placement off measured
+  /// evidence. Re-check if new hairstyle bakes land.
   (double, double, double) _crownPlacement(String model, bool portrait) {
     if (portrait) {
-      return model == 'female'
-          ? (0.500, 0.355, 0.303)
-          : (0.500, 0.328, 0.371);
+      return model == 'female' ? (0.500, 0.355, 0.303) : (0.500, 0.328, 0.371);
     }
-    return model == 'female'
-        ? (0.475, 0.105, 0.121)
-        : (0.504, 0.113, 0.125);
+    return model == 'female' ? (0.475, 0.105, 0.121) : (0.504, 0.113, 0.125);
   }
 }
