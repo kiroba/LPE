@@ -499,8 +499,8 @@ const Map<String, Map<String, Color>> _kSwatches = {
 };
 
 /// The base-model section of the choosers (Male / Female chips).
-/// Extracted so the tabbed Customize panel (Masters Trainer Settings
-/// layout) and the full chooser stack below share one implementation.
+/// Extracted so the tabbed Customize panel and the full chooser
+/// stack below share one implementation.
 class ModelChooser extends StatelessWidget {
   const ModelChooser({
     super.key,

@@ -52,8 +52,8 @@ String relativeAgo(DateTime then, DateTime now) {
 
 /// How long the Halo waits between unprompted (ambient) lines, and how
 /// long a speech bubble — tapped or ambient — stays up. Ambient speech
-/// is deliberately sparse: Masters' lobby feels alive because its
-/// characters talk occasionally, not constantly.
+/// is deliberately sparse: a place feels alive when its characters
+/// talk occasionally, not constantly.
 const Duration kAmbientSpeechInterval = Duration(seconds: 45);
 const Duration kSpeechBubbleVisible = Duration(milliseconds: 4500);
 

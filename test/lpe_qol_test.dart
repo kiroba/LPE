@@ -2,7 +2,7 @@
 // rule (item 2) and the Node tab's plain-language line (item 4).
 // Item 0/1/3 are interaction + persistence wiring in main.dart and
 // are covered by the analyze pass and on-device verdict, not here.
-// The Masters refinements (same day) add the ambient-speech pool
+// The refinements (same day) add the ambient-speech pool
 // (haloNodeBit / haloAmbientLines / pickAmbientLine) below.
 import 'dart:math';
 
