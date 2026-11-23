@@ -498,8 +498,11 @@ const Map<String, Map<String, Color>> _kSwatches = {
   },
 };
 
-class AppearanceChoosers extends StatelessWidget {
-  const AppearanceChoosers({
+/// The base-model section of the choosers (Male / Female chips).
+/// Extracted so the tabbed Customize panel (Masters Trainer Settings
+/// layout) and the full chooser stack below share one implementation.
+class ModelChooser extends StatelessWidget {
+  const ModelChooser({
     super.key,
     required this.appearance,
     required this.onChanged,
@@ -523,8 +526,7 @@ class AppearanceChoosers extends StatelessWidget {
             ChoiceChip(
               label: const Text('Male'),
               selected: model == 'male',
-              onSelected: (_) =>
-                  onChanged(HaloAppearance.defaultFor('male')),
+              onSelected: (_) => onChanged(HaloAppearance.defaultFor('male')),
             ),
             ChoiceChip(
               label: const Text('Female'),
@@ -540,25 +542,81 @@ class AppearanceChoosers extends StatelessWidget {
           'look.',
           style: TextStyle(fontSize: 12),
         ),
+      ],
+    );
+  }
+}
+
+/// One appearance axis section: its heading plus the value chips for
+/// the current model. See [ModelChooser] for why this is separate.
+class AxisChooser extends StatelessWidget {
+  const AxisChooser({
+    super.key,
+    required this.appearance,
+    required this.axis,
+    required this.onChanged,
+  });
+
+  final HaloAppearance appearance;
+
+  /// One of kHaloAxes.
+  final String axis;
+  final ValueChanged<HaloAppearance> onChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    final model = appearance.baseModel;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(kHaloAxisLabels[axis]!,
+            style: Theme.of(context).textTheme.titleSmall),
+        const SizedBox(height: 8),
+        Wrap(
+          spacing: 8,
+          runSpacing: 8,
+          children: [
+            for (final value in haloAxisValues(model, axis))
+              ChoiceChip(
+                avatar: _dot(axis, value),
+                label: Text(haloAxisValueLabel(axis, value)),
+                selected: appearance.valueOf(axis) == value,
+                onSelected: (_) =>
+                    onChanged(appearance.withAxis(axis, value)),
+              ),
+          ],
+        ),
+      ],
+    );
+  }
+
+  Widget? _dot(String axis, String value) {
+    final color = _kSwatches[axis]?[value];
+    if (color == null) return null;
+    return CircleAvatar(backgroundColor: color, radius: 8);
+  }
+}
+
+class AppearanceChoosers extends StatelessWidget {
+  const AppearanceChoosers({
+    super.key,
+    required this.appearance,
+    required this.onChanged,
+  });
+
+  final HaloAppearance appearance;
+  final ValueChanged<HaloAppearance> onChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        ModelChooser(appearance: appearance, onChanged: onChanged),
         for (final axis in kHaloAxes) ...[
           const SizedBox(height: 16),
-          Text(kHaloAxisLabels[axis]!,
-              style: Theme.of(context).textTheme.titleSmall),
-          const SizedBox(height: 8),
-          Wrap(
-            spacing: 8,
-            runSpacing: 8,
-            children: [
-              for (final value in haloAxisValues(model, axis))
-                ChoiceChip(
-                  avatar: _dot(axis, value),
-                  label: Text(haloAxisValueLabel(axis, value)),
-                  selected: appearance.valueOf(axis) == value,
-                  onSelected: (_) =>
-                      onChanged(appearance.withAxis(axis, value)),
-                ),
-            ],
-          ),
+          AxisChooser(
+              appearance: appearance, axis: axis, onChanged: onChanged),
         ],
         const SizedBox(height: 12),
         const Text(
@@ -570,11 +628,5 @@ class AppearanceChoosers extends StatelessWidget {
         ),
       ],
     );
-  }
-
-  Widget? _dot(String axis, String value) {
-    final color = _kSwatches[axis]?[value];
-    if (color == null) return null;
-    return CircleAvatar(backgroundColor: color, radius: 8);
   }
 }

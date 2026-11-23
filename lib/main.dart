@@ -9,6 +9,7 @@
 // The profile lives on the user's own Omni Node (daemon 8.25+), written as a
 // person-signed event (POST /api/lpe/profile). This app holds no server and
 // phones nothing home: it talks to 127.0.0.1, or to the hub the user names.
+import 'dart:async';
 import 'dart:math';
 
 import 'package:flutter/material.dart';
@@ -112,6 +113,20 @@ class _LpeHomeState extends State<LpeHome> {
   bool _haloSpeaking = false;
   int _speechSeq = 0;
 
+  /// The line the speech bubble is currently showing, set when the
+  /// bubble opens (a tap speaks [_haloLine]; ambient speech speaks a
+  /// rotated line from the pool — see [_ambientSpeak]).
+  String _speechLine = '';
+
+  /// Ambient speech (Masters refinement 1): a periodic timer that lets
+  /// the Halo speak unprompted, the way Masters' lobby characters
+  /// bubble-talk on their own. [_ambientTick] is the rotation step
+  /// into the line pool; [_sheetOpen] suppresses ambient lines while
+  /// any modal sheet is up.
+  Timer? _ambientTimer;
+  int _ambientTick = 0;
+  bool _sheetOpen = false;
+
   /// The standard node wiring (Omni-Core-UI v0.1.4). L1 landed it; L2
   /// routes the node check through it (see [_testNode]). The profile
   /// endpoints stay LpeApi's (a dedicated person-signed contract, not the
@@ -160,14 +175,42 @@ class _LpeHomeState extends State<LpeHome> {
   void initState() {
     super.initState();
     _load();
+    _ambientTimer = Timer.periodic(kAmbientSpeechInterval, (_) {
+      _ambientSpeak();
+    });
   }
 
   @override
   void dispose() {
+    _ambientTimer?.cancel();
     _tokenCtrl.dispose();
     _handleCtrl.dispose();
     _ambientCtrl.dispose();
     super.dispose();
+  }
+
+  /// One ambient-speech beat. Gentle by design: it stays quiet unless
+  /// the full-screen Halo is simply sitting there — never while a
+  /// modal sheet is open, never over a line already showing, never
+  /// before the identity has loaded, and never when the system asks
+  /// for reduced motion (the same MediaQuery switch the stage's idle
+  /// loop honours). The line itself comes from the honest pool in
+  /// lpe_qol.dart — sign, node state, the person's own Plaza status,
+  /// the crown if worn.
+  void _ambientSpeak() {
+    if (!mounted || _sheetOpen || _haloSpeaking || _identity == null) {
+      return;
+    }
+    if (MediaQuery.maybeOf(context)?.disableAnimations ?? false) return;
+    final lines = haloAmbientLines(
+      signName: _signData.$2,
+      nodeBit: haloNodeBit(reach: _nodeReach, isLoopback: _isLoopback),
+      ambientActivity: _ambientCtrl.text,
+      crownEquipped: _cosmetics.contains('head_socket_crown'),
+    );
+    final line = pickAmbientLine(lines, _ambientTick++);
+    if (line.isEmpty) return;
+    _showSpeech(line);
   }
 
   Future<void> _load() async {
@@ -652,31 +695,31 @@ class _LpeHomeState extends State<LpeHome> {
 
   /// Tapping the Halo (Item 0, Masters EX dialogue style): surface
   /// its name tag + one line in its own voice, then let it fade.
-  void _tapHalo() {
+  void _tapHalo() => _showSpeech(_haloLine);
+
+  /// Shows the speech bubble with [line] for the standard bubble
+  /// duration, then lets it fade. Shared by the tap and by ambient
+  /// speech; the sequence counter keeps a stale auto-hide timer from
+  /// dismissing a newer line.
+  void _showSpeech(String line) {
     final seq = ++_speechSeq;
-    setState(() => _haloSpeaking = true);
-    Future.delayed(const Duration(milliseconds: 4500), () {
+    setState(() {
+      _speechLine = line;
+      _haloSpeaking = true;
+    });
+    Future.delayed(kSpeechBubbleVisible, () {
       if (mounted && seq == _speechSeq) {
         setState(() => _haloSpeaking = false);
       }
     });
   }
 
-  /// The Halo's one dialogue line: who it is, and how the node feels
-  /// from inside the persona. Plain status, spoken as the Halo.
-  String get _haloLine {
-    final nodeBit = switch (_nodeReach) {
-      NodeReach.connected => _isLoopback
-          ? 'Your node is right here with me — we\'re synced.'
-          : 'Your laptop node is humming — we\'re synced.',
-      NodeReach.searching => 'Listening for your node…',
-      NodeReach.rejected =>
-        'Your node answered, but it doesn\'t trust this app yet.',
-      NodeReach.unreachable => 'No node in earshot right now.',
-      NodeReach.unknown => 'Still waking up…',
-    };
-    return '${_signData.$2} sign, standing by. $nodeBit';
-  }
+  /// The Halo's tap dialogue line: who it is, and how the node feels
+  /// from inside the persona. Plain status, spoken as the Halo. (The
+  /// node clause also leads the ambient pool — see haloAmbientLines.)
+  String get _haloLine =>
+      '${_signData.$2} sign, standing by. '
+      '${haloNodeBit(reach: _nodeReach, isLoopback: _isLoopback)}';
 
   Widget _speechBubble() {
     return Material(
@@ -698,7 +741,7 @@ class _LpeHomeState extends State<LpeHome> {
             ),
             const SizedBox(height: 3),
             Text(
-              _haloLine,
+              _speechLine,
               style: const TextStyle(color: Colors.white, fontSize: 14),
             ),
           ],
@@ -754,6 +797,7 @@ class _LpeHomeState extends State<LpeHome> {
   /// the Halo stays visible above it and keeps updating live while the
   /// person works in the sheet.
   void _openSheet(Widget Function(StateSetter setSheet) builder) {
+    _sheetOpen = true;
     showModalBottomSheet<void>(
       context: context,
       isScrollControlled: true,
@@ -764,12 +808,15 @@ class _LpeHomeState extends State<LpeHome> {
           child: builder(setSheet),
         ),
       ),
-    );
+    ).whenComplete(() => _sheetOpen = false);
   }
 
   // -- Customize sheet (the old Creator tab, behind a modal) ----------
 
   void _showCustomizeSheet() {
+    // The selected chooser tab is sheet-local state, captured here so
+    // it survives the sheet's own rebuilds (Masters refinement 3).
+    var tab = 0;
     _openSheet((setSheet) => ListView(
           padding: const EdgeInsets.fromLTRB(16, 4, 16, 24),
           children: [
@@ -822,10 +869,11 @@ class _LpeHomeState extends State<LpeHome> {
               style: TextStyle(fontSize: 12),
             ),
             const SizedBox(height: 12),
-            AppearanceChoosers(
-              appearance: _appearance,
-              onChanged: (a) {
-                _setAppearance(a);
+            _appearancePanel(
+              tab: tab,
+              setSheet: setSheet,
+              onTab: (t) {
+                tab = t;
                 setSheet(() {});
               },
             ),
@@ -899,78 +947,262 @@ class _LpeHomeState extends State<LpeHome> {
         ));
   }
 
+  /// The Customize sheet's appearance panel, Masters Trainer Settings
+  /// style (refinement 3): category tabs across the top — Model, Skin,
+  /// Hair, Top, Bottom, Shoes, using the app's own axis names — and
+  /// the selected category's choosers in a panel below, instead of one
+  /// long scroll of every axis. The sections are the same
+  /// ModelChooser / AxisChooser widgets the full chooser stack uses,
+  /// and every change flows through [_setAppearance], so the Halo
+  /// above the sheet keeps updating live and the phone-local
+  /// persistence is untouched.
+  Widget _appearancePanel({
+    required int tab,
+    required StateSetter setSheet,
+    required ValueChanged<int> onTab,
+  }) {
+    const tabLabels = ['Model', 'Skin', 'Hair', 'Top', 'Bottom', 'Shoes'];
+    void changed(HaloAppearance a) {
+      _setAppearance(a);
+      setSheet(() {});
+    }
+
+    final Widget section;
+    switch (tab) {
+      case 1:
+        section = AxisChooser(
+            appearance: _appearance, axis: 'skin', onChanged: changed);
+      case 2:
+        section = Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            AxisChooser(
+                appearance: _appearance,
+                axis: 'hairColor',
+                onChanged: changed),
+            const SizedBox(height: 16),
+            AxisChooser(
+                appearance: _appearance,
+                axis: 'hairStyle',
+                onChanged: changed),
+          ],
+        );
+      case 3:
+        section = AxisChooser(
+            appearance: _appearance, axis: 'shirt', onChanged: changed);
+      case 4:
+        section = AxisChooser(
+            appearance: _appearance, axis: 'pants', onChanged: changed);
+      case 5:
+        section = AxisChooser(
+            appearance: _appearance, axis: 'shoes', onChanged: changed);
+      default:
+        section = ModelChooser(appearance: _appearance, onChanged: changed);
+    }
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        SingleChildScrollView(
+          scrollDirection: Axis.horizontal,
+          child: Row(
+            children: [
+              for (var i = 0; i < tabLabels.length; i++) ...[
+                if (i > 0) const SizedBox(width: 8),
+                ChoiceChip(
+                  label: Text(tabLabels[i]),
+                  selected: tab == i,
+                  onSelected: (_) => onTab(i),
+                ),
+              ],
+            ],
+          ),
+        ),
+        const SizedBox(height: 12),
+        Container(
+          width: double.infinity,
+          padding: const EdgeInsets.all(12),
+          decoration: BoxDecoration(
+            color: Theme.of(context).colorScheme.surfaceContainerHighest,
+            borderRadius: BorderRadius.circular(12),
+          ),
+          child: section,
+        ),
+        const SizedBox(height: 12),
+        const Text(
+          'Every option here is free — these are the basic recipe '
+          'variants of your Halo, baked from the same master. One bake '
+          'shows one change at a time: the stage shows your most '
+          'recent change (layered bakes come later).',
+          style: TextStyle(fontSize: 12),
+        ),
+      ],
+    );
+  }
+
   // -- Profile sheet (identity, progress, transfer codes) -------------
 
   void _showProfileSheet() {
     _openSheet((setSheet) {
       final identity = _identity;
       final profile = _profile;
+      final aura = profile?['aura'];
+      final tier = aura is Map ? '${aura['tier'] ?? ''}' : 'no profile';
       return ListView(
         padding: const EdgeInsets.fromLTRB(16, 4, 16, 24),
         children: [
           _statusLine(),
-          Center(
-            child: CircleAvatar(
-              radius: 44,
-              backgroundColor: _auraColor,
-              child: Text(_signData.$3,
-                  style: const TextStyle(fontSize: 40, color: Colors.white)),
+          // Header band (Masters Profile layout, refinement 2): the
+          // sign-glyph avatar, handle and sign, and the identity short
+          // id this sheet has always shown — now with the copy
+          // affordance Masters puts beside the id. It copies the
+          // PUBLIC key, which is safe to share; the seed-bearing
+          // transfer code stays behind its warning dialog below.
+          Container(
+            padding: const EdgeInsets.all(16),
+            decoration: BoxDecoration(
+              color: _auraColor,
+              borderRadius: BorderRadius.circular(16),
+            ),
+            child: Row(
+              children: [
+                CircleAvatar(
+                  radius: 32,
+                  backgroundColor: Colors.black26,
+                  child: Text(_signData.$3,
+                      style:
+                          const TextStyle(fontSize: 30, color: Colors.white)),
+                ),
+                const SizedBox(width: 14),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        profile?['handle_display'] as String? ??
+                            (identity == null ? '…' : 'No handle yet'),
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 18,
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                      const SizedBox(height: 2),
+                      Text(
+                        '${_signData.$3} ${_signData.$2} · $tier',
+                        style: const TextStyle(
+                            color: Colors.white70, fontSize: 13),
+                      ),
+                      const SizedBox(height: 2),
+                      Text(
+                        identity == null
+                            ? 'Loading identity…'
+                            : 'Identity ${identity.shortId}',
+                        style: const TextStyle(
+                            color: Colors.white70, fontSize: 13),
+                      ),
+                    ],
+                  ),
+                ),
+                if (identity != null)
+                  IconButton(
+                    icon: const Icon(Icons.copy, color: Colors.white),
+                    tooltip: 'Copy identity id (public key)',
+                    onPressed: () async {
+                      await Clipboard.setData(
+                          ClipboardData(text: identity.pubkeyHex));
+                      if (!mounted) return;
+                      setState(() => _status =
+                          'Identity id copied — it is your public key, safe to share.');
+                      setSheet(() {});
+                    },
+                  ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 12),
+          // Edit Look sits on the Profile screen in Masters; here it
+          // closes Profile and opens the Customize sheet.
+          FilledButton.tonalIcon(
+            onPressed: () {
+              Navigator.of(context).pop();
+              WidgetsBinding.instance.addPostFrameCallback((_) {
+                if (mounted) _showCustomizeSheet();
+              });
+            },
+            icon: const Icon(Icons.auto_fix_high),
+            label: const Text('Edit Look'),
+          ),
+          const SizedBox(height: 12),
+          Card(
+            child: Padding(
+              padding: const EdgeInsets.all(16),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text('Progress',
+                      style: Theme.of(context).textTheme.titleSmall),
+                  const SizedBox(height: 8),
+                  if (profile == null)
+                    const Text(
+                        'You have no Halo on this node yet. Open Customize, pick a handle and a sign, and save — Plaza-Brawler will offer your own character as your fighter.')
+                  else
+                    Text(
+                        'XP ${profile['xp'] ?? 0} · Plaza credits ${profile['plaza_credits'] ?? 0}\n'
+                        'Your fighter in Plaza-Brawler is built from this profile: your handle, your aura, stats from $_sign.'),
+                  const SizedBox(height: 12),
+                  FilledButton.tonal(
+                    onPressed: _busy
+                        ? null
+                        : () async {
+                            await _refreshProfile();
+                            setSheet(() {});
+                          },
+                    child: const Text('Refresh from node'),
+                  ),
+                ],
+              ),
             ),
           ),
           const SizedBox(height: 12),
           Card(
-            child: ListTile(
-              leading: CircleAvatar(
-                backgroundColor: _auraColor,
-                child: Text(_signData.$3,
-                    style: const TextStyle(color: Colors.white)),
+            child: Padding(
+              padding: const EdgeInsets.all(16),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text('Identity transfer',
+                      style: Theme.of(context).textTheme.titleSmall),
+                  const SizedBox(height: 4),
+                  const Text(
+                    'Carries this identity into your other Omni apps on this phone — '
+                    'Plaza-Brawler imports it in Settings, then fights as this Halo.',
+                    style: TextStyle(fontSize: 12, color: Colors.black54),
+                  ),
+                  const SizedBox(height: 12),
+                  SizedBox(
+                    width: double.infinity,
+                    child: OutlinedButton(
+                      onPressed: _busy ? null : _copyTransferCode,
+                      child: const Text('Copy identity transfer code'),
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  SizedBox(
+                    width: double.infinity,
+                    child: OutlinedButton(
+                      onPressed: _busy ? null : _importTransferCode,
+                      child: const Text('Import identity transfer code'),
+                    ),
+                  ),
+                  const SizedBox(height: 6),
+                  const Text(
+                    'Import restores an identity here — the recovery path if a reinstall '
+                    'ever wipes this app and you hold the code in another app.',
+                    style: TextStyle(fontSize: 12, color: Colors.black54),
+                  ),
+                ],
               ),
-              title: Text(profile?['handle_display'] as String? ??
-                  (identity == null ? '…' : 'No handle yet')),
-              subtitle: Text(identity == null
-                  ? 'Loading identity…'
-                  : 'Identity ${identity.shortId} · ${profile?['aura'] is Map ? (profile!['aura'] as Map)['tier'] ?? '' : 'no profile'}'),
             ),
-          ),
-          const SizedBox(height: 12),
-          if (profile == null)
-            const Text(
-                'You have no Halo on this node yet. Open Customize, pick a handle and a sign, and save — Plaza-Brawler will offer your own character as your fighter.')
-          else
-            Text(
-                'XP ${profile['xp'] ?? 0} · Plaza credits ${profile['plaza_credits'] ?? 0}\n'
-                'Your fighter in Plaza-Brawler is built from this profile: your handle, your aura, stats from $_sign.'),
-          const SizedBox(height: 16),
-          FilledButton.tonal(
-            onPressed: _busy
-                ? null
-                : () async {
-                    await _refreshProfile();
-                    setSheet(() {});
-                  },
-            child: const Text('Refresh from node'),
-          ),
-          const SizedBox(height: 8),
-          OutlinedButton(
-            onPressed: _busy ? null : _copyTransferCode,
-            child: const Text('Copy identity transfer code'),
-          ),
-          const SizedBox(height: 8),
-          OutlinedButton(
-            onPressed: _busy ? null : _importTransferCode,
-            child: const Text('Import identity transfer code'),
-          ),
-          const SizedBox(height: 6),
-          const Text(
-            'Carries this identity into your other Omni apps on this phone — '
-            'Plaza-Brawler imports it in Settings, then fights as this Halo.',
-            style: TextStyle(fontSize: 12, color: Colors.black54),
-          ),
-          const SizedBox(height: 6),
-          const Text(
-            'Import restores an identity here — the recovery path if a reinstall '
-            'ever wipes this app and you hold the code in another app.',
-            style: TextStyle(fontSize: 12, color: Colors.black54),
           ),
         ],
       );
